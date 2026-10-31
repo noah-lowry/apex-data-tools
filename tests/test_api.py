@@ -84,14 +84,25 @@ def test_assign_flow(client):
     r = client.put(f"/api/files/{file['id']}/roll", json={"roll_id": roll["id"]})
     assert r.status_code == 200 and r.json()["roll_id"] == roll["id"]
     assert client.put(f"/api/files/{file['id']}/roll", json={"roll_id": other["id"]}).status_code == 409
+    second = upload(client, content=b"another recording", filename="b.FIT").json()["file"]
+    r = client.put(f"/api/files/{second['id']}/roll", json={"roll_id": roll["id"]})
+    assert r.status_code == 409 and "already has data" in r.json()["detail"]
     assert client.put("/api/files/999/roll", json={"roll_id": roll["id"]}).status_code == 404
     assert client.put(f"/api/files/{file['id']}/roll", json={"roll_id": 999}).status_code == 404
 
+    # The roll now happened when its data says: back on the sample's day, 10/03.
     today = client.get("/api/collection").json()
-    assert today["rolls"][1]["file_ids"] == [file["id"]]
-    assert [f["id"] for f in today["files"]] == [file["id"]]
+    assert [r["id"] for r in today["rolls"]] == [other["id"]]
+    assert [f["id"] for f in today["files"]] == [second["id"]]  # unparseable, so dated today
+    moved = next(r for r in client.get("/api/collection", params={"all": True}).json()["rolls"]
+                 if r["id"] == roll["id"])
+    assert moved["file_ids"] == [file["id"]]
+    assert moved["at_utc"] == moved["data_start_utc"] == file["roll_start_utc"]
+    assert moved["day"] == file["day"] and moved["title"].endswith("(10/03/26)")
 
+    # Unassigning puts it back on the day it was logged.
     assert client.delete(f"/api/files/{file['id']}/roll").json()["roll_id"] is None
+    assert {r["id"] for r in client.get("/api/collection").json()["rolls"]} == {roll["id"], other["id"]}
 
 
 def test_qr_key_signs_in_and_leaves_the_url(app):

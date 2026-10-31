@@ -69,15 +69,38 @@ CREATE INDEX IF NOT EXISTS watch_file_day ON watch_file(day);
 CREATE INDEX IF NOT EXISTS watch_file_roll ON watch_file(roll_id);
 """
 
-ROLL_QUERY = """
-WITH numbered AS (
-    SELECT r.*, ROW_NUMBER() OVER (
-        PARTITION BY r.buggy_id, r.day ORDER BY r.created_utc, r.id
-    ) AS number
-    FROM roll r
+# Every roll with the time it happened. Once data is assigned, that is the
+# detected roll start in its file (the earliest, should an older database hold
+# several for one roll): the watch saw the buggy cross the
+# start gate, which beats the moment someone pressed Create. Until then, it is the
+# creation time. The roll's day, and so its number, follow the same time. (With
+# MIN(), SQLite takes the bare `day` column from the row holding the minimum.)
+ROLLS_CTE = """
+data_time AS (
+    SELECT roll_id, MIN(roll_start_utc) AS data_start_utc, day AS data_day
+    FROM watch_file
+    WHERE roll_id IS NOT NULL AND roll_start_utc IS NOT NULL
+    GROUP BY roll_id
+),
+timed AS (
+    SELECT r.id, r.buggy_id, r.driver_id, r.notes, r.created_utc, r.edited_utc,
+           d.data_start_utc,
+           COALESCE(d.data_start_utc, r.created_utc) AS at_utc,
+           COALESCE(d.data_day, r.day) AS day
+    FROM roll r LEFT JOIN data_time d ON d.roll_id = r.id
 )
-SELECT n.id, n.notes, n.created_utc, n.edited_utc, n.day, n.number,
-       b.name AS buggy, d.name AS driver
+"""
+
+ROLL_QUERY = f"""
+WITH {ROLLS_CTE},
+numbered AS (
+    SELECT t.*, ROW_NUMBER() OVER (
+        PARTITION BY t.buggy_id, t.day ORDER BY t.at_utc, t.id
+    ) AS number
+    FROM timed t
+)
+SELECT n.id, n.notes, n.created_utc, n.edited_utc, n.data_start_utc, n.at_utc,
+       n.day, n.number, b.name AS buggy, d.name AS driver
 FROM numbered n
 JOIN buggy b ON b.id = n.buggy_id
 LEFT JOIN driver d ON d.id = n.driver_id
@@ -270,7 +293,9 @@ class Store:
         return rolls[0]
 
     def list_rolls(self, day: str | None = None, roll_id: int | None = None) -> list[dict]:
-        """Rolls newest first, each with its number, title and assigned file ids."""
+        """Rolls newest first by when they happened, each with its number, title and
+        assigned file ids. `at_utc` is that time; `data_start_utc` is set when it
+        came from assigned data rather than from `created_utc`."""
         where, params = [], []
         if day is not None:
             where.append("n.day = ?")
@@ -279,7 +304,7 @@ class Store:
             where.append("n.id = ?")
             params.append(roll_id)
         sql = ROLL_QUERY + (" WHERE " + " AND ".join(where) if where else "")
-        sql += " ORDER BY n.created_utc DESC, n.id DESC"
+        sql += " ORDER BY n.at_utc DESC, n.id DESC"
 
         with self._connect() as conn:
             rows = [dict(r) for r in conn.execute(sql, params)]
@@ -408,25 +433,35 @@ class Store:
         sql = f"SELECT {FILE_COLUMNS} FROM watch_file"
         params: list = []
         if day is not None:
-            sql += " WHERE day = ? OR roll_id IN (SELECT id FROM roll WHERE day = ?)"
+            sql = (
+                f"WITH {ROLLS_CTE} {sql} "
+                "WHERE day = ? OR roll_id IN (SELECT id FROM timed WHERE day = ?)"
+            )
             params = [day, day]
         sql += " ORDER BY COALESCE(roll_start_utc, start_utc, uploaded_utc) DESC, id DESC"
         with self._connect() as conn:
             return [dict(r) for r in conn.execute(sql, params)]
 
     def assign_file(self, file_id: int, roll_id: int, now: datetime | None = None) -> dict:
-        """Attach an unassigned file to a roll. Reassigning requires unassigning first."""
+        """Pair an unassigned file with a roll that has no data yet.
+
+        One file per roll, one roll per file. Both conditions are checked in the
+        same UPDATE, so two phones assigning at once cannot both succeed.
+        Changing a pairing means unassigning first.
+        """
         with self._connect() as conn:
             if conn.execute("SELECT 1 FROM roll WHERE id = ?", (roll_id,)).fetchone() is None:
                 raise NotFound(f"no roll {roll_id}")
             updated = conn.execute(
                 "UPDATE watch_file SET roll_id = ?, assigned_utc = ? "
-                "WHERE id = ? AND roll_id IS NULL",
-                (roll_id, _iso(now or _utc_now()), file_id),
+                "WHERE id = ? AND roll_id IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM watch_file WHERE roll_id = ?)",
+                (roll_id, _iso(now or _utc_now()), file_id, roll_id),
             ).rowcount
         if not updated:
-            self.get_file(file_id)  # raises NotFound if that is the reason
-            raise Conflict(f"file {file_id} is already assigned to a roll")
+            if self.get_file(file_id)["roll_id"] is not None:  # NotFound if no such file
+                raise Conflict(f"file {file_id} is already assigned to a roll")
+            raise Conflict(f"roll {roll_id} already has data assigned")
         return self.get_file(file_id)
 
     def unassign_file(self, file_id: int) -> dict:

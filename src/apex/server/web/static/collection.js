@@ -100,7 +100,7 @@ function fileFacts(f, { withName = true } = {}) {
 const when = (iso, rel) =>
   h("span", { class: "item-when" }, h("span", { class: "num" }, clock(iso)), ` · ${rel}`);
 
-const rollLabel = (r) => `${r.buggy} roll ${r.number} (${relTime(r.created_utc, r.day)})`;
+const rollLabel = (r) => `${r.buggy} roll ${r.number} (${relTime(r.at_utc, r.day)})`;
 
 // ── server ────────────────────────────────────────────────────────────────
 
@@ -340,26 +340,25 @@ $("roll-form").addEventListener("submit", async (e) => {
 
 // ── assigning data ────────────────────────────────────────────────────────
 
-/** The roll a file most likely belongs to: same buggy label, nearest in time,
-    preferring rolls that have no data yet. Only a guess; nothing is sent
-    until Assign is pressed. */
+/** The roll a file most likely belongs to: same buggy label, nearest in time.
+    Only a guess; nothing is sent until Assign is pressed. */
 function suggestRoll(file, rolls) {
   if (!file.buggy) return "";
   const at = Date.parse(rollStart(file));
+  const gap = (r) => Math.abs(Date.parse(r.at_utc) - at);
   const matches = rolls
     .filter((r) => r.buggy.toLowerCase() === file.buggy.toLowerCase() && r.day === file.day)
-    .sort((a, b) =>
-      (a.file_ids.length > 0) - (b.file_ids.length > 0) ||
-      Math.abs(Date.parse(a.created_utc) - at) - Math.abs(Date.parse(b.created_utc) - at));
+    .sort((a, b) => gap(a) - gap(b));
   return matches.length ? String(matches[0].id) : "";
 }
 
-function fileItem(file, rolls) {
+function fileItem(file, allRolls) {
+  // A roll holds one recording, so only rolls without data can take this one.
+  const rolls = allRolls.filter((r) => r.file_ids.length === 0);
   const status = h("span", { class: "status", role: "status" });
   const select = h("select", { class: "well", "aria-label": `Roll for ${file.filename}` },
-    h("option", { value: "" }, rolls.length ? "Choose roll…" : "No rolls to assign to"),
-    rolls.map((r) => h("option", { value: r.id },
-      rollLabel(r) + (r.file_ids.length ? " · has data" : ""))),
+    h("option", { value: "" }, rolls.length ? "Choose roll…" : "No rolls without data"),
+    rolls.map((r) => h("option", { value: r.id }, rollLabel(r))),
   );
   select.value = state.picks.get(file.id) ?? suggestRoll(file, rolls);
   if (!select.value) select.value = "";
@@ -381,7 +380,7 @@ function fileItem(file, rolls) {
       await api("PUT", `/api/files/${file.id}/roll`, { roll_id: Number(select.value) });
       state.picks.delete(file.id);
     } catch (err) {
-      status.textContent = err.status === 409 ? "Already assigned by someone else." : err.message;
+      status.textContent = err.status === 409 ? "Someone else assigned that just now; pick again." : err.message;
       status.className = "status bad";
     }
     state.dataKey = "";
@@ -408,11 +407,13 @@ function rollItem(roll, filesById) {
   return h("li", { class: "item" },
     h("div", { class: "item-head" },
       h("span", { class: "item-title" }, roll.title),
-      when(roll.created_utc, relTime(roll.created_utc, roll.day)),
+      when(roll.at_utc, relTime(roll.at_utc, roll.day)),
     ),
     h("div", { class: "item-row" },
       h("div", { class: "facts" },
         h("span", {}, roll.driver ? `Driver: ${roll.driver}` : "No driver"),
+        // Timed by its data; keep the moment it was logged visible too.
+        roll.data_start_utc ? h("span", {}, "logged ", h("span", { class: "num" }, clock(roll.created_utc))) : null,
         roll.edited_utc ? h("span", {}, "edited ", h("span", { class: "num" }, clock(roll.edited_utc))) : null),
       h("button", { class: "btn-quiet small", type: "button", onclick: () => openEditor(roll) }, "Edit"),
     ),
@@ -516,7 +517,7 @@ function rollEditor(roll) {
   return h("li", { class: "item editing" },
     h("div", { class: "item-head" },
       h("span", { class: "item-title" }, `Editing ${roll.title}`),
-      when(roll.created_utc, relTime(roll.created_utc, roll.day))),
+      when(roll.at_utc, relTime(roll.at_utc, roll.day))),
     form,
   );
 }

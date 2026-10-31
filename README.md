@@ -60,9 +60,16 @@ crosses the start gate shows *no roll detected*, along with how long the watch r
 
 **Assigning data.** New files appear under *Unassigned data* on every phone within a few
 seconds. Pick the roll each belongs to and press *Assign*. When the file's buggy label
-matches a roll, that roll is pre-selected. Only unassigned files can be assigned. To fix
-a mistake, *Unassign* it from the roll first. Both lists show today only; switch to
+matches a roll, that roll is pre-selected. Each roll takes one recording, so the dropdown
+only offers rolls with no data yet. Only unassigned files can be assigned. To fix a
+mistake, *Unassign* the file from its roll first. Both lists show today only; switch to
 *All days* for older entries.
+
+Once a roll has data, the data decides when it happened. The roll's time becomes the
+moment the watch saw the buggy cross the start gate, not when the entry was created, and
+its number and day follow from that. So entries logged late or out of order still end up
+numbered in the order the rolls actually ran. The entry time stays visible as "logged …".
+Buggy, driver and notes always come from the entry, never from the file's buggy label.
 
 ## Data
 

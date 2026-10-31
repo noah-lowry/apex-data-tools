@@ -91,11 +91,49 @@ def test_assign_only_unassigned(store):
     assert store.assign_file(f["id"], other["id"])["roll_id"] == other["id"]
 
 
-def test_files_listed_with_the_day_of_their_roll(store):
-    """A recording from another day still shows under the roll it was assigned to."""
-    roll = store.create_roll("Solaris", now=T0)
-    _, f = store.ingest_file(SAMPLE_FIT.read_bytes(), "a.FIT", None)  # recorded 10/03
-    assert store.list_files(day=local_day(T0)) == []
+def test_assigned_data_sets_the_rolls_time_day_and_number(store):
+    """The roll start in the data beats the entry's creation time."""
+    _, f = store.ingest_file(SAMPLE_FIT.read_bytes(), "a.FIT", None)  # roll at 11:38:53 UTC
+    sample_time = datetime.fromisoformat(f["roll_start_utc"])
+    logged_late = store.create_roll("Solaris", now=sample_time + timedelta(minutes=20))
+    logged_first = store.create_roll("Solaris", now=sample_time + timedelta(minutes=10))
+    assert store.get_roll(logged_first["id"])["number"] == 1
 
-    store.assign_file(f["id"], roll["id"])
-    assert [x["id"] for x in store.list_files(day=local_day(T0))] == [f["id"]]
+    store.assign_file(f["id"], logged_late["id"])
+    late = store.get_roll(logged_late["id"])
+    assert late["at_utc"] == late["data_start_utc"] == f["roll_start_utc"]
+    assert late["created_utc"] == logged_late["created_utc"]
+    # Its data shows it rolled before the other entry was logged: it is now Roll 1.
+    assert late["number"] == 1 and store.get_roll(logged_first["id"])["number"] == 2
+    assert [r["id"] for r in store.list_rolls(day=f["day"])] == [logged_first["id"], late["id"]]
+
+
+def test_data_without_a_detected_roll_leaves_the_logged_time(store):
+    roll = store.create_roll("Solaris", now=T0)
+    _, junk = store.ingest_file(b"not a fit file", "junk.FIT", None, now=T0)
+    store.assign_file(junk["id"], roll["id"])
+    r = store.get_roll(roll["id"])
+    assert r["data_start_utc"] is None and r["at_utc"] == r["created_utc"]
+
+
+def test_files_listed_with_the_day_of_their_roll(store):
+    """A file shows under its roll's day, even if the file was recorded on another."""
+    roll = store.create_roll("Solaris", now=T0)
+    _, junk = store.ingest_file(b"junk", "j.FIT", None, now=T0 - timedelta(days=3))
+    assert store.list_files(day=local_day(T0)) == []
+    store.assign_file(junk["id"], roll["id"])
+    assert [x["id"] for x in store.list_files(day=local_day(T0))] == [junk["id"]]
+
+
+def test_a_roll_takes_only_one_file(store):
+    roll = store.create_roll("Solaris")
+    _, first = store.ingest_file(SAMPLE_FIT.read_bytes(), "a.FIT", None)
+    _, second = store.ingest_file(b"another recording", "b.FIT", None)
+    store.assign_file(first["id"], roll["id"])
+
+    with pytest.raises(Conflict, match="already has data"):
+        store.assign_file(second["id"], roll["id"])
+    assert store.get_file(second["id"])["roll_id"] is None
+
+    store.unassign_file(first["id"])
+    assert store.assign_file(second["id"], roll["id"])["roll_id"] == roll["id"]
