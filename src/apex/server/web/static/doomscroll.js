@@ -78,7 +78,7 @@ function showFeed(params) {
   doom.cursor = 0;
   doom.nextCursor = null;
   fill($("doom-cards"), );
-  fill($("board"), );
+  fill($("board"));
   loadFeed();
 }
 
@@ -169,7 +169,7 @@ function rollCard(c) {
     splitBar(c),
     h("div", { class: "card-foot" },
       h("span", { class: "num" }, `${mph(c.max_mph)} top`),
-      c.hill3_mph !== null ? h("span", { class: "num" }, `${mph(c.hill3_mph)} into Hill 3`) : h("span", { class: "warn" }, `lost after ${c.end_gate}`),
+      c.hill3_mph !== null ? h("span", { class: "num" }, `${mph(c.hill3_mph)} into Hill 3`) : h("span", { class: "warn" }, `GPS cut out after ${c.end_gate}`),
       c.reference ? h("span", {}, `vs ${c.reference.title.replace(/ \(.*\)$/, "")}`) : null),
     c.notes ? h("p", { class: "card-note" }, notePreview(c.notes)) : null,
   );
@@ -205,7 +205,7 @@ function splitBar(c) {
   return h("div", { class: "splitbar" }, c.segments.map((s) => {
     const spec = segSpec(s.id);
     if (s.status !== "ok") {
-      return h("div", { class: "split-cell missed", style: "flex-grow: 1", title: `${spec.name}: not measured` },
+      return h("div", { class: "split-cell missed", style: "flex-grow: 1", title: `${spec.name}: no time` },
         h("i", {}), h("span", { class: "num" }, "—"));
     }
     return h("div", { class: "split-cell", style: `flex-grow: ${s.time_sec}`, title: spec.name },
@@ -222,9 +222,9 @@ const rollLink = (r, text) => h("a", { href: `#doomscroll/roll/${r.id}` }, text 
 function renderBoard(board) {
   $("board-meta").textContent = board.fastest.length ? `fastest: ${secs(board.fastest[0].total_sec)}` : "";
   const panel = (title, ...body) => h("section", { class: "board-panel" }, h("h3", {}, title), ...body);
-  const empty = h("p", { class: "empty-note" }, "No complete rolls yet.");
+  const empty = h("p", { class: "empty-note" }, "no complete rolls yet");
 
-  fill($("board"), 
+  fill($("board"),
     panel("Fastest rolls", board.fastest.length
       ? h("ol", { class: "board-list" }, board.fastest.map((r) => h("li", {},
           rollLink(r), h("span", { class: "dim" }, r.driver || ""), h("span", { class: "num" }, secs(r.total_sec)))))
@@ -247,7 +247,7 @@ function renderBoard(board) {
       ? h("p", { class: "board-today" }, rollLink(board.today),
           h("span", { class: "num big-num" }, secs(board.today.total_sec)),
           h("span", { class: "dim" }, board.today.driver || ""))
-      : h("p", { class: "empty-note" }, "No complete rolls today yet.")),
+      : h("p", { class: "empty-note" }, "nothing complete today yet")),
   );
 }
 
@@ -273,7 +273,7 @@ async function openRoll(id) {
     doom.page = { data, ref, refId, segment: doom.course.segments[2].id };  // the Chute first: where rolls differ most
     renderRoll();
   } catch (err) {
-    fill(view, backLink(), h("p", { class: "empty-note" }, err.status === 404 ? "No such roll." : err.message));
+    fill(view, backLink(), h("p", { class: "empty-note" }, err.status === 404 ? "roll not found" : err.message));
   }
 }
 
@@ -297,7 +297,7 @@ function renderRoll() {
   const view = $("doom-roll");
   if (!data.analysis) {
     fill(view, backLink(), rollTitle(roll),
-      h("p", { class: "empty-note" }, "No data is assigned to this roll, so there is nothing to analyse yet."));
+      h("p", { class: "empty-note" }, "no watch data on this one yet"));
     return;
   }
   const an = data.analysis;
@@ -311,11 +311,11 @@ function renderRoll() {
     roll.notes ? block("Notes", null, h("p", { class: "notes roll-notes" }, roll.notes)) : null,
     compareBar(data),
     block("Splits", cmp ? `vs ${cmp.roll.title}` : "", splitsTable(data, cmp)),
-    block("Speed", "mph over distance, aligned at every gate", chartBox("speed")),
-    cmp ? block("Time gap", "where time was won and lost", chartBox("gap"),
-      h("p", { class: "footnote" }, `Seconds behind ${cmp.roll.title} at each point. Rising means losing time there; falling means gaining it. Exact at every gate.`)) : null,
-    block("Map", "coloured by speed", h("div", { class: "map", id: "roll-map" }), speedLegend(an), mapNote(cmp)),
-    block("Segment", "pick one to dig in", segmentPicker(), h("div", { id: "seg-detail" })),
+    block("Speed", "mph along the course", chartBox("speed")),
+    cmp ? block("Time gap", `vs ${cmp.roll.title}`, chartBox("gap"),
+      h("p", { class: "footnote" }, `secs behind ${cmp.roll.title} at each point. line going up = losing time, going down = catching up`)) : null,
+    block("Map", "colored by speed", h("div", { class: "map", id: "roll-map" }), speedLegend(an), mapNote(cmp)),
+    block("Segment", "pick one", segmentPicker(), h("div", { id: "seg-detail" })),
     block("Data quality", null, dataQuality(data)),
   );
 
@@ -343,8 +343,8 @@ function scoreboard(data, cmp) {
   const stat = (label, value) => h("div", {}, h("dt", {}, label), h("dd", { class: "num" }, value));
   const ranks = [];
   if (t.rank) ranks.push(`#${t.rank} of ${t.n} ${data.roll.buggy} rolls`, `#${t.rank_day} of ${t.n_day} that day`);
-  else if (!an.complete) ranks.push(an.finished ? "not ranked: a segment wasn't measured" : `partial: GPS lost after ${an.end_gate}`);
-  if (an.stopped_sec >= 3) ranks.push(`stopped for ${Math.round(an.stopped_sec)} s on the course`);
+  else if (!an.complete) ranks.push(an.finished ? "not ranked (missing a segment time)" : `partial, GPS cut out after ${an.end_gate}`);
+  if (an.stopped_sec >= 3) ranks.push(`stopped ~${Math.round(an.stopped_sec)} s`);
   return h("section", { class: "scoreboard" },
     h("div", { class: "hero" },
       h("span", { class: "hero-time num" }, an.total_sec.toFixed(1), h("span", { class: "unit" }, "s")),
@@ -381,8 +381,8 @@ function splitsTable(data, cmp) {
     const r = cmp && cmp.an.segments.find((x) => x.id === s.id);
     const name = h("td", {}, h("button", { class: "seg-link", type: "button", onclick: () => pickSegment(s.id, true) },
       h("i", { class: "swatch", style: `background: ${segColor(spec.color)}` }), spec.name,
-      spec.bad_gps ? h("span", { class: "tag", title: "GPS is known to be unreliable here" }, "bad GPS") : null));
-    if (s.status !== "ok") return h("tr", { class: "missed" }, name, h("td", { class: "n absent", colspan: 9 }, "not measured"));
+      spec.bad_gps ? h("span", { class: "tag", title: "GPS is spotty here (trees)" }, "bad GPS") : null));
+    if (s.status !== "ok") return h("tr", { class: "missed" }, name, h("td", { class: "n absent", colspan: 9 }, "no time"));
     return h("tr", {}, name,
       cell(s.time_sec, (v) => v.toFixed(2)),
       gapCell(r && r.status === "ok" ? s.time_sec - r.time_sec : null),
@@ -576,7 +576,7 @@ function speedLegend(an) {
 }
 
 function mapNote(cmp) {
-  return h("p", { class: "footnote", id: "map-note" }, cmp ? "Hover a chart to follow along on the map." : "");
+  return h("p", { class: "footnote", id: "map-note" }, cmp ? "hover a chart and the dot follows along here" : "");
 }
 
 /** A Leaflet map with OpenStreetMap tiles, falling back to the drawn course
@@ -687,7 +687,7 @@ function renderSegment() {
 
   const intro = h("p", { class: "seg-desc" }, spec.description);
   if (s.status !== "ok") {
-    fill(box, intro, h("p", { class: "empty-note" }, "This segment wasn't measured on this roll: one of its gates was not crossed."));
+    fill(box, intro, h("p", { class: "empty-note" }, "no time here, watch missed one of the gates"));
     return;
   }
   const vs = (mine, theirs, unit, betterLow) => {
@@ -713,12 +713,12 @@ function renderSegment() {
   fill(box, 
     intro,
     facts,
-    spec.bad_gps ? h("p", { class: "notice-inline" }, "GPS is known to be unreliable in this segment (tree cover). Times at its gates hold; speeds inside it are rougher.") : null,
-    s.samples < 8 ? h("p", { class: "notice-inline" }, `Only ${s.samples} samples fall inside this segment (one per second). The gate times are interpolated precisely; the shape of the speed curve between samples is not known.`) : null,
-    h("div", { class: "seg-visuals" }, h("div", {}, h("h3", { class: "sub" }, "Speed through the segment"), chart), h("div", {}, h("h3", { class: "sub" }, "Line"), mapEl)),
+    spec.bad_gps ? h("p", { class: "notice-inline" }, "trees mess with the GPS here. split time's fine, speeds in between are rough") : null,
+    s.samples < 8 ? h("p", { class: "notice-inline" }, `only ${s.samples} points in here (watch logs 1/sec), so the speed line's more of a sketch. split time's still legit`) : null,
+    h("div", { class: "seg-visuals" }, h("div", {}, h("h3", { class: "sub" }, "speed through here"), chart), h("div", {}, h("h3", { class: "sub" }, "on the map"), mapEl)),
     h("div", { class: "seg-visuals" },
-      h("div", {}, h("h3", { class: "sub" }, `Every ${data.roll.buggy} time here`), segmentRanking(data, id, ok ? ref.roll.id : null)),
-      h("div", {}, h("h3", { class: "sub" }, "Does entry speed pay off?"), entryScatter(data, id, ok ? ref.roll.id : null))),
+      h("div", {}, h("h3", { class: "sub" }, `every ${data.roll.buggy} time here`), segmentRanking(data, id, ok ? ref.roll.id : null)),
+      h("div", {}, h("h3", { class: "sub" }, "entry speed vs. time"), entryScatter(data, id, ok ? ref.roll.id : null))),
   );
 
   // Zoomed speed chart: distance within the segment, aligned to the comparison's segment length.
@@ -767,7 +767,7 @@ function segmentRanking(data, id, refId) {
 /** Entry speed against segment time across the buggy's rolls. */
 function entryScatter(data, id, refId) {
   const pts = data.peers.filter((p) => p.segments[id]).map((p) => ({ id: p.id, title: p.title, driver: p.driver, x: p.segments[id].entry_mph, y: p.segments[id].time_sec }));
-  if (pts.length < 3) return h("p", { class: "empty-note" }, "Needs at least three rolls of this buggy through here.");
+  if (pts.length < 3) return h("p", { class: "empty-note" }, `need 3+ ${data.roll.buggy} rolls for this`);
   const W = 360, H = 220, m = { l: 44, r: 10, t: 10, b: 34 };
   const ext = (vs) => { const lo = Math.min(...vs), hi = Math.max(...vs), pad = (hi - lo) * 0.1 || 0.5; return [lo - pad, hi + pad]; };
   const [x0, x1] = ext(pts.map((p) => p.x)), [y0, y1] = ext(pts.map((p) => p.y));
@@ -809,15 +809,15 @@ function dataQuality(data) {
   const an = data.analysis, f = data.file;
   const rows = [
     ["Recording", `${f.filename}${f.device_name ? ` · ${f.device_name.replace(/^Garmin /, "")} …${String(f.device_id).slice(-4)}` : ""}`],
-    ["Samples in the roll", `${an.samples} (one per second; about one every ${(an.dist_m / Math.max(1, an.total_sec)).toFixed(0)} m at this pace)`],
-    ["Per segment", an.segments.map((s) => `${segName(s.id)}: ${s.status === "ok" ? s.samples : "not measured"}`).join(" · ")],
+    ["Samples in the roll", `${an.samples} (watch logs once a sec, ~${(an.dist_m / Math.max(1, an.total_sec)).toFixed(0)} m apart at this speed)`],
+    ["Per segment", an.segments.map((s) => `${segName(s.id)}: ${s.status === "ok" ? s.samples : "no time"}`).join(" · ")],
     ["Bad-GPS segments", doom.course.segments.filter((s) => s.bad_gps).map((s) => s.name).join(", ") || "none"],
-    ["Finish", an.finished ? `reached ${an.end_gate}` : `GPS lost after ${an.end_gate}; later segments not measured`],
+    ["Finish", an.finished ? `made it to ${an.end_gate}` : `GPS cut out after ${an.end_gate}, no times after that`],
   ];
   return h("div", {},
     h("dl", { class: "quality" }, rows.map(([k, v]) => h("div", {}, h("dt", {}, k), h("dd", {}, v)))),
     h("p", { class: "footnote" },
-      "Speeds are the watch's Doppler readings, accurate to a few cm/s. Gate times are interpolated between samples at the exact crossing, so splits are precise even though positions are only good to a few metres. There is no altitude: these watches don't record it."));
+      "speed comes straight off the watch, super accurate. position can be off a few meters but splits are still solid since gate crossings get worked out exactly. no altitude, the watches don't record it"));
 }
 
 // Charts and maps read theme colours when drawn, so redraw on a theme change.
