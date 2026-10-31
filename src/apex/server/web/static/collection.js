@@ -83,7 +83,7 @@ function fileFacts(f, { withName = true } = {}) {
     );
   } else {
     facts.push(
-      h("span", { class: "num" }, duration(f.roll_duration_sec)),
+      h("span", { class: "num" }, `${f.roll_duration_sec.toFixed(1)} s`),
       h("span", { class: "num" }, metres(f.roll_dist_m)),
       h("span", { class: "num" }, `${f.roll_max_speed_mph.toFixed(1)} mph max`),
     );

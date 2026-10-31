@@ -217,7 +217,7 @@ def _outcome_row(outcome) -> list:
     return [
         *cells,
         f"{start:%H:%M:%S}",
-        _clock_duration(stored["roll_duration_sec"]),
+        f"{stored['roll_duration_sec']:.1f} s",
         f"{stored['roll_dist_m']:,.0f} m",
         f"{stored['roll_max_speed_mph']:.1f} mph",
         note,
