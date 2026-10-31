@@ -40,7 +40,6 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "fitparse" },
-    { name = "gpxpy" },
     { name = "pydantic" },
     { name = "python-multipart" },
     { name = "segno" },
@@ -58,7 +57,6 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.162.0" },
     { name = "fitparse", specifier = ">=1.2.0" },
-    { name = "gpxpy", specifier = ">=1.6.2" },
     { name = "pydantic", specifier = ">=2.14.2" },
     { name = "python-multipart", specifier = ">=0.0.33" },
     { name = "segno", specifier = ">=1.6.6" },
@@ -121,15 +119,6 @@ name = "fitparse"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/61/ed/5637fe96c56d55dfa6317ab16745f9a83ef2690d093cee8f0b59f983675f/fitparse-1.2.0.tar.gz", hash = "sha256:2d691022452dea6dabad13cc6e017ca467fe8a3a895cd3ac67a50a7bb716b4a9", size = 65716, upload-time = "2020-09-07T03:27:21.926Z" }
-
-[[package]]
-name = "gpxpy"
-version = "1.6.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/20/ad/6f1a34e702c72cb495bb258396f237ded76c00f9fe67054a44d778d24ed9/gpxpy-1.6.2.tar.gz", hash = "sha256:a72c484b97ec42b80834353b029cc8ee1b79f0ffca1179b2210bb3baf26c01ae", size = 111695, upload-time = "2023-11-29T17:25:38.391Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/9f/62df6c1e52462bdd04275b36cec49efa9e8af7e7b834499eb288f73dcfbc/gpxpy-1.6.2-py3-none-any.whl", hash = "sha256:289bc2d80f116c988d0a1e763fda22838f83005573ece2bbc6521817b26fb40a", size = 42649, upload-time = "2023-11-29T17:25:35.76Z" },
-]
 
 [[package]]
 name = "h11"

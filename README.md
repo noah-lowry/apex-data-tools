@@ -3,12 +3,26 @@
 Data tools for Apex buggy practice: log rolls from a phone, pull recordings off Garmin
 watches, and match the two up.
 
+## Install
+
+Needs [uv](https://docs.astral.sh/uv/). It fetches Python 3.14 if you don't have it.
+
+```sh
+uv tool install git+https://github.com/noah-lowry/apex-data-tools   # or, from a checkout: uv tool install .
+apex --help
+```
+
+This puts `apex` on your PATH. If uv warns that its tool directory isn't on PATH, run
+`uv tool update-shell` once. Update later with
+`uv tool upgrade apex-data-tools`, or reinstall from a checkout with
+`uv tool install --reinstall .`.
+
 ## Running the server
 
 On whichever machine hosts it (a laptop at the field, or a server elsewhere):
 
 ```sh
-uv run apex serve --password <pw>
+apex serve --password <pw>
 ```
 
 It prints the address phones should open (same Wi-Fi network) and a QR code. Scanning
@@ -44,7 +58,7 @@ data assigned to the deleted roll goes back to *Unassigned data*.
 and run:
 
 ```sh
-uv run apex collect-rolls -b Solaris /run/media/$USER/GARMIN
+apex collect-rolls -b Solaris /run/media/$USER/GARMIN
 ```
 
 This searches the directory recursively. It only sends activity recordings from today
@@ -83,5 +97,6 @@ Everything lives in `~/.local/share/apex` (override with `--data-dir` or
 
 ```sh
 uv sync
-uv run pytest
+uv run pytest        # includes a test that builds the wheel and checks its contents
+uv run apex --help   # run from the checkout without installing
 ```
