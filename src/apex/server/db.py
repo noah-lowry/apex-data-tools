@@ -1,0 +1,344 @@
+"""SQLite storage for roll entries, the name roster, and collected watch files.
+
+Timestamps are assigned here, never by clients, so the server alone decides the
+order of rolls. Roll numbers ("Solaris Roll 3") are the rank of a roll among
+that buggy's rolls on its local day; they are computed on read, never stored.
+
+Raw FIT bytes are kept content-addressed under `raw/`, so every run can be
+re-parsed from the original file later. SQLite holds only a summary of each.
+"""
+
+import hashlib
+import os
+import sqlite3
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+from apex.parsing import GarminParser
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS buggy (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    last_used_utc TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS driver (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    last_used_utc TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS roll (
+    id INTEGER PRIMARY KEY,
+    buggy_id INTEGER NOT NULL REFERENCES buggy(id),
+    driver_id INTEGER REFERENCES driver(id),
+    notes TEXT NOT NULL DEFAULT '',
+    created_utc TEXT NOT NULL,
+    day TEXT NOT NULL  -- server-local date the roll was created
+);
+CREATE TABLE IF NOT EXISTS watch_file (
+    id INTEGER PRIMARY KEY,
+    sha256 TEXT NOT NULL UNIQUE,
+    filename TEXT NOT NULL,
+    buggy TEXT,  -- free-text label from collect-rolls, not a roster entry
+    device_id TEXT,
+    device_name TEXT,
+    start_utc TEXT,
+    end_utc TEXT,
+    duration_sec REAL,
+    total_dist_m REAL,
+    max_speed_mph REAL,
+    point_count INTEGER NOT NULL DEFAULT 0,
+    parse_error TEXT,
+    uploaded_utc TEXT NOT NULL,
+    day TEXT NOT NULL,  -- server-local date of the recording (upload, if unknown)
+    roll_id INTEGER REFERENCES roll(id),
+    assigned_utc TEXT
+);
+CREATE INDEX IF NOT EXISTS roll_day ON roll(day);
+CREATE INDEX IF NOT EXISTS watch_file_day ON watch_file(day);
+CREATE INDEX IF NOT EXISTS watch_file_roll ON watch_file(roll_id);
+"""
+
+ROLL_QUERY = """
+WITH numbered AS (
+    SELECT r.*, ROW_NUMBER() OVER (
+        PARTITION BY r.buggy_id, r.day ORDER BY r.created_utc, r.id
+    ) AS number
+    FROM roll r
+)
+SELECT n.id, n.notes, n.created_utc, n.day, n.number,
+       b.name AS buggy, d.name AS driver
+FROM numbered n
+JOIN buggy b ON b.id = n.buggy_id
+LEFT JOIN driver d ON d.id = n.driver_id
+"""
+
+FILE_COLUMNS = (
+    "id, sha256, filename, buggy, device_id, device_name, start_utc, end_utc, "
+    "duration_sec, total_dist_m, max_speed_mph, point_count, parse_error, "
+    "uploaded_utc, day, roll_id, assigned_utc"
+)
+
+
+class NotFound(LookupError):
+    pass
+
+
+class Conflict(ValueError):
+    pass
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(UTC).isoformat(timespec="milliseconds")
+
+
+def local_day(dt: datetime) -> str:
+    """The server-local calendar date of an aware datetime."""
+    return dt.astimezone().date().isoformat()
+
+
+def roll_title(buggy: str, number: int, day: str) -> str:
+    return f"{buggy} Roll {number} ({date.fromisoformat(day):%m/%d/%y})"
+
+
+class Store:
+    def __init__(self, data_dir: Path):
+        self.data_dir = data_dir
+        self.raw_dir = data_dir / "raw"
+        self.db_path = data_dir / "apex.db"
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            conn.executescript(SCHEMA)
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """One connection per operation; commits on success, rolls back on error."""
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
+    # ── roster ───────────────────────────────────────────────────────────────
+
+    def roster(self) -> dict[str, list[str]]:
+        """Every buggy and driver name ever entered, most recently used first."""
+        with self._connect() as conn:
+            return {
+                table: [
+                    row["name"]
+                    for row in conn.execute(
+                        f"SELECT name FROM {table} ORDER BY last_used_utc DESC, name"
+                    )
+                ]
+                for table in ("buggy", "driver")
+            }
+
+    @staticmethod
+    def _resolve_name(conn: sqlite3.Connection, table: str, name: str, now: str) -> int:
+        """Id of the case-insensitive match for `name`, creating it on first use."""
+        conn.execute(
+            f"INSERT INTO {table} (name, last_used_utc) VALUES (?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET last_used_utc = excluded.last_used_utc",
+            (name, now),
+        )
+        return conn.execute(f"SELECT id FROM {table} WHERE name = ?", (name,)).fetchone()[0]
+
+    # ── rolls ────────────────────────────────────────────────────────────────
+
+    def create_roll(
+        self, buggy: str, driver: str | None = None, notes: str = "", now: datetime | None = None
+    ) -> dict:
+        moment = now or _utc_now()
+        stamp = _iso(moment)
+        with self._connect() as conn:
+            buggy_id = self._resolve_name(conn, "buggy", buggy, stamp)
+            driver_id = self._resolve_name(conn, "driver", driver, stamp) if driver else None
+            roll_id = conn.execute(
+                "INSERT INTO roll (buggy_id, driver_id, notes, created_utc, day) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (buggy_id, driver_id, notes, stamp, local_day(moment)),
+            ).lastrowid
+        return self.get_roll(roll_id)
+
+    def get_roll(self, roll_id: int) -> dict:
+        rolls = self.list_rolls(roll_id=roll_id)
+        if not rolls:
+            raise NotFound(f"no roll {roll_id}")
+        return rolls[0]
+
+    def list_rolls(self, day: str | None = None, roll_id: int | None = None) -> list[dict]:
+        """Rolls newest first, each with its number, title and assigned file ids."""
+        where, params = [], []
+        if day is not None:
+            where.append("n.day = ?")
+            params.append(day)
+        if roll_id is not None:
+            where.append("n.id = ?")
+            params.append(roll_id)
+        sql = ROLL_QUERY + (" WHERE " + " AND ".join(where) if where else "")
+        sql += " ORDER BY n.created_utc DESC, n.id DESC"
+
+        with self._connect() as conn:
+            rows = [dict(r) for r in conn.execute(sql, params)]
+            ids = [r["id"] for r in rows]
+            files: dict[int, list[int]] = {i: [] for i in ids}
+            if ids:
+                marks = ",".join("?" * len(ids))
+                for f in conn.execute(
+                    f"SELECT id, roll_id FROM watch_file WHERE roll_id IN ({marks}) "
+                    "ORDER BY start_utc, id",
+                    ids,
+                ):
+                    files[f["roll_id"]].append(f["id"])
+
+        for r in rows:
+            r["title"] = roll_title(r["buggy"], r["number"], r["day"])
+            r["file_ids"] = files[r["id"]]
+        return rows
+
+    # ── watch files ──────────────────────────────────────────────────────────
+
+    def raw_path(self, sha256: str) -> Path:
+        return self.raw_dir / sha256[:2] / f"{sha256}.fit"
+
+    def ingest_file(
+        self, content: bytes, filename: str, buggy: str | None, now: datetime | None = None
+    ) -> tuple[str, dict]:
+        """Store a FIT file once, keyed by its content.
+
+        Returns (status, file), status being "created", "exists", or
+        "buggy_set" when a file seen before without a buggy label now gets one.
+        An existing label is never overwritten.
+        """
+        sha = hashlib.sha256(content).hexdigest()
+        moment = now or _utc_now()
+
+        existing = self._file_by_sha(sha)
+        if existing is not None:
+            if existing["buggy"] is None and buggy:
+                with self._connect() as conn:
+                    conn.execute(
+                        "UPDATE watch_file SET buggy = ? WHERE id = ? AND buggy IS NULL",
+                        (buggy, existing["id"]),
+                    )
+                return "buggy_set", self.get_file(existing["id"])
+            return "exists", existing
+
+        path = self.raw_path(sha)
+        if not path.exists():
+            _atomic_write(path, content)
+
+        summary: dict = {"point_count": 0, "parse_error": None}
+        day = local_day(moment)
+        try:
+            roll = GarminParser.parse_fit(str(path))
+        except Exception as exc:  # a truncated or corrupt file is still kept raw
+            summary["parse_error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            summary.update(
+                device_id=roll.device_id,
+                device_name=roll.device_name,
+                start_utc=_iso(roll.start_time) if roll.start_time else None,
+                end_utc=_iso(roll.end_time) if roll.end_time else None,
+                duration_sec=roll.duration_sec,
+                total_dist_m=roll.total_dist_m,
+                max_speed_mph=roll.max_speed_mph,
+                point_count=roll.point_count,
+            )
+            if roll.start_time:
+                day = local_day(roll.start_time)
+
+        columns = {
+            "sha256": sha,
+            "filename": filename,
+            "buggy": buggy or None,
+            "uploaded_utc": _iso(moment),
+            "day": day,
+            **summary,
+        }
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"INSERT INTO watch_file ({', '.join(columns)}) "
+                f"VALUES ({', '.join('?' * len(columns))}) ON CONFLICT(sha256) DO NOTHING",
+                list(columns.values()),
+            )
+            inserted = cursor.rowcount == 1
+        if not inserted:
+            # Lost a race with a concurrent upload of the same bytes.
+            return self.ingest_file(content, filename, buggy, now)
+        return "created", self._file_by_sha(sha)
+
+    def _file_by_sha(self, sha: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {FILE_COLUMNS} FROM watch_file WHERE sha256 = ?", (sha,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_file(self, file_id: int) -> dict:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {FILE_COLUMNS} FROM watch_file WHERE id = ?", (file_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFound(f"no file {file_id}")
+        return dict(row)
+
+    def list_files(self, day: str | None = None) -> list[dict]:
+        """Files newest recording first. Always includes files assigned to rolls
+        of `day`, so a roll's data is listed even if it was recorded on another day."""
+        sql = f"SELECT {FILE_COLUMNS} FROM watch_file"
+        params: list = []
+        if day is not None:
+            sql += " WHERE day = ? OR roll_id IN (SELECT id FROM roll WHERE day = ?)"
+            params = [day, day]
+        sql += " ORDER BY COALESCE(start_utc, uploaded_utc) DESC, id DESC"
+        with self._connect() as conn:
+            return [dict(r) for r in conn.execute(sql, params)]
+
+    def assign_file(self, file_id: int, roll_id: int, now: datetime | None = None) -> dict:
+        """Attach an unassigned file to a roll. Reassigning requires unassigning first."""
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM roll WHERE id = ?", (roll_id,)).fetchone() is None:
+                raise NotFound(f"no roll {roll_id}")
+            updated = conn.execute(
+                "UPDATE watch_file SET roll_id = ?, assigned_utc = ? "
+                "WHERE id = ? AND roll_id IS NULL",
+                (roll_id, _iso(now or _utc_now()), file_id),
+            ).rowcount
+        if not updated:
+            self.get_file(file_id)  # raises NotFound if that is the reason
+            raise Conflict(f"file {file_id} is already assigned to a roll")
+        return self.get_file(file_id)
+
+    def unassign_file(self, file_id: int) -> dict:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE watch_file SET roll_id = NULL, assigned_utc = NULL WHERE id = ?",
+                (file_id,),
+            )
+        return self.get_file(file_id)
+
+
+def _atomic_write(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".part")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise

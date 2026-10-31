@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>APEX · Collection</title>
+  <link rel="stylesheet" href="/static/apex.css">
+  <script>
+    try {
+      const saved = localStorage.getItem("apex-theme");
+      if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
+    } catch {}
+  </script>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="/">
+    <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 21H2z"/></svg>
+    <span>APEX</span>
+  </a>
+
+  <!-- One tab for now; analysis tabs join this list later. -->
+  <nav class="tabs" aria-label="Tools">
+    <a class="tab" href="#collection" data-tab="collection" aria-current="page">Collection</a>
+  </nav>
+
+  <div class="topbar-actions">
+    <button id="theme-toggle" type="button" aria-label="Toggle light and dark">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20z"/></svg>
+    </button>
+    <!-- POST, so a link prefetch cannot sign anyone out mid-practice. -->
+    <form method="post" action="/logout">
+      <button class="btn-quiet" id="logout" type="submit">Sign out</button>
+    </form>
+  </div>
+</header>
+
+<main id="tab-collection" data-panel="collection">
+
+  <div class="scope-row">
+    <span class="scope-day" id="scope-day">—</span>
+    <div class="segmented" role="group" aria-label="Show">
+      <button type="button" data-scope="today" aria-pressed="true">Today</button>
+      <button type="button" data-scope="all" aria-pressed="false">All days</button>
+    </div>
+    <span class="sync" id="sync" role="status" aria-live="polite"></span>
+  </div>
+
+  <section class="block" id="new-roll">
+    <header class="block-head">
+      <h2>New roll</h2>
+      <span class="block-meta">Logged at the moment you create it</span>
+    </header>
+
+    <form class="form" id="roll-form" novalidate>
+      <div class="form-pair">
+        <div class="field">
+          <label class="field-label" for="roll-buggy">Buggy<span class="req" aria-hidden="true">*</span></label>
+          <span class="select-wrap"><select class="well" id="roll-buggy" required></select></span>
+          <div class="choice" id="roll-buggy-new" hidden>
+            <input class="well" id="roll-buggy-name" maxlength="80" autocomplete="off"
+                   aria-label="New buggy name" placeholder="New buggy name">
+            <button class="btn-primary" type="button" data-confirm>Add</button>
+            <button class="btn-quiet" type="button" data-cancel>Cancel</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="roll-driver">Driver</label>
+          <span class="select-wrap"><select class="well" id="roll-driver"></select></span>
+          <div class="choice" id="roll-driver-new" hidden>
+            <input class="well" id="roll-driver-name" maxlength="80" autocomplete="off"
+                   aria-label="New driver name" placeholder="New driver name">
+            <button class="btn-primary" type="button" data-confirm>Add</button>
+            <button class="btn-quiet" type="button" data-cancel>Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="roll-notes">Notes</label>
+        <textarea class="well" id="roll-notes" rows="3" maxlength="4000"
+                  placeholder="Conditions, pushers, anything worth knowing."></textarea>
+      </div>
+
+      <div class="form-foot">
+        <button class="btn-primary" type="submit" id="roll-submit">Create roll</button>
+        <span class="status" id="roll-status" role="status" aria-live="polite"></span>
+      </div>
+    </form>
+  </section>
+
+  <section class="block" id="assign">
+    <header class="block-head">
+      <h2>Unassigned data</h2>
+      <span class="block-meta" id="assign-meta"></span>
+    </header>
+    <ol class="list" id="file-list"></ol>
+    <p class="empty-note" id="file-empty" hidden>
+      Nothing waiting. When a watch comes back, run
+      <code>apex collect-rolls -b &lt;buggy&gt; &lt;dir&gt;</code> on the laptop.
+    </p>
+  </section>
+
+  <section class="block" id="rolls">
+    <header class="block-head">
+      <h2>Rolls</h2>
+      <span class="block-meta" id="rolls-meta"></span>
+    </header>
+    <ol class="list" id="roll-list"></ol>
+    <p class="empty-note" id="roll-empty" hidden>No rolls yet.</p>
+  </section>
+
+</main>
+
+<script src="/static/collection.js"></script>
+</body>
+</html>

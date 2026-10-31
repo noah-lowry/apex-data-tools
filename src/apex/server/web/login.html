@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>APEX · sign in</title>
+  <link rel="stylesheet" href="/static/apex.css">
+  <script>
+    /* Match the theme chosen on the main page before paint. */
+    try {
+      const saved = localStorage.getItem("apex-theme");
+      if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
+    } catch {}
+  </script>
+</head>
+<body class="gate">
+<main class="gate-main">
+  <form class="gate-card" method="post" action="/login" autocomplete="on">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 21H2z"/></svg>
+      <span>APEX</span>
+    </div>
+    <p class="gate-title">Data collection</p>
+
+    <label class="field">
+      <span class="field-label">Password</span>
+      <input class="well" type="password" name="password" required autofocus
+             autocapitalize="off" autocorrect="off" spellcheck="false"
+             autocomplete="current-password">
+    </label>
+    <input type="hidden" name="next" id="next" value="/">
+    <button class="btn-primary" type="submit">Sign in</button>
+    <p class="gate-error" id="error" role="alert" hidden></p>
+  </form>
+</main>
+<script>
+  const params = new URLSearchParams(location.search);
+  document.getElementById("next").value = params.get("next") || "/";
+  const error = document.getElementById("error");
+  if (params.has("locked")) {
+    error.textContent = `Too many attempts. Try again in ${parseInt(params.get("locked"), 10) || 60} s.`;
+    error.hidden = false;
+  } else if (params.has("error")) {
+    error.textContent = "Wrong password.";
+    error.hidden = false;
+  }
+</script>
+</body>
+</html>
