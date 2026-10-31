@@ -36,7 +36,9 @@ Settings are kept in `~/.config/apex/config.toml`, readable only by you. Use
 driver and add notes, then *Create roll*. Pick from names used before, or choose
 *+ New…* to add one. Choosing a buggy pre-fills whoever last drove it. The server
 timestamps each entry, so rolls are numbered per buggy per day:
-"Solaris Roll 3 (10/31/26)".
+"Solaris Roll 3 (10/31/26)". Got something wrong? *Edit* on any roll changes its
+buggy, driver or notes, or deletes it. Delete takes a second tap to confirm, and any
+data assigned to the deleted roll goes back to *Unassigned data*.
 
 **Collecting watch data (any configured machine).** When a buggy comes back, stop the watch, plug it in,
 and run:
@@ -50,6 +52,11 @@ This searches the directory recursively. It only sends activity recordings from 
 match them up later. Pass `--no-buggy` if you don't know which buggy. Running it again is
 safe: files are stored once, keyed by their content. An existing buggy label is never
 overwritten; a missing one is filled in.
+
+Times shown for a file are the roll's, not the watch's. The roll starts when the buggy
+crosses the course's first gate, and ends at the last gate it is seen crossing. If GPS
+drops out before the finish, the roll is marked *partial*. A recording that never
+crosses the start gate shows *no roll detected*, along with how long the watch ran.
 
 **Assigning data.** New files appear under *Unassigned data* on every phone within a few
 seconds. Pick the roll each belongs to and press *Assign*. When the file's buggy label

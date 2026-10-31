@@ -303,6 +303,17 @@ main {
 .assign-row .select-wrap { max-width: 28rem; }
 .item .status { min-height: 0; }
 
+.item-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
+
+/* An open editor is marked by an accent rule down its left edge. */
+.item.editing { padding-left: var(--s4); border-left: 2px solid var(--accent); }
+.item.editing:first-child { padding-top: var(--s2); }
+.item.editing .form { max-width: none; gap: var(--s4); }
+.form-foot .spacer { flex: 1 1 auto; }
+
+.btn-quiet.danger { color: var(--bad); }
+.btn-quiet.danger.armed { background: var(--bad); border-color: var(--bad); color: var(--on-accent); }
+
 .notes { font-size: var(--t-small); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 64ch; }
 
 .attached { list-style: none; margin: var(--s1) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
@@ -355,6 +366,8 @@ body.gate { display: flex; flex-direction: column; min-height: 100vh; }
 
   .form-pair { grid-template-columns: 1fr; }
   .form-foot .btn-primary { flex: 1 1 100%; }
+  .form-foot .btn-quiet { flex: 1 1 0; }
+  .form-foot .spacer { display: none; }
   .assign-row .select-wrap { max-width: none; }
   .gate-card { margin-left: 0; }
 }

@@ -105,3 +105,33 @@ def test_qr_key_signs_in_and_leaves_the_url(app):
     r = stranger.get("/", params={"key": "guess"})
     assert r.headers["location"] == "/login?error=1"
     assert stranger.get("/api/collection").status_code == 401
+
+
+def test_edit_roll(client):
+    roll = client.post("/api/rolls", json={"buggy": "Solaros", "driver": "Mia", "notes": "x"}).json()
+    client.post("/api/rolls", json={"buggy": "Solaris"})
+
+    r = client.put(f"/api/rolls/{roll['id']}", json={"buggy": "Solaris", "driver": None, "notes": "fixed"})
+    assert r.status_code == 200
+    edited = r.json()
+    assert (edited["buggy"], edited["driver"], edited["notes"]) == ("Solaris", None, "fixed")
+    assert edited["created_utc"] == roll["created_utc"] and edited["edited_utc"]
+    # Created first, so it is now Solaris Roll 1 and the other one is Roll 2.
+    assert edited["number"] == 1
+    assert [r["number"] for r in client.get("/api/collection").json()["rolls"]] == [2, 1]
+    # The typo no longer appears in the dropdowns; neither does the dropped driver.
+    assert client.get("/api/collection").json()["roster"] == {"buggy": ["Solaris"], "driver": []}
+
+    assert client.put(f"/api/rolls/{roll['id']}", json={"buggy": " "}).status_code == 422
+    assert client.put("/api/rolls/999", json={"buggy": "Solaris"}).status_code == 404
+
+
+def test_delete_roll_unassigns_its_data(client):
+    roll = client.post("/api/rolls", json={"buggy": "Solaris"}).json()
+    file = upload(client).json()["file"]
+    client.put(f"/api/files/{file['id']}/roll", json={"roll_id": roll["id"]})
+
+    assert client.delete(f"/api/rolls/{roll['id']}").status_code == 204
+    assert client.delete(f"/api/rolls/{roll['id']}").status_code == 404
+    data = client.get("/api/collection", params={"all": True}).json()
+    assert data["rolls"] == [] and data["files"][0]["roll_id"] is None

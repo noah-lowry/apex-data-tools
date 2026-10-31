@@ -132,6 +132,22 @@ def create_app(*, password: str, data_dir: Path, advertise_url: str | None = Non
     def create_roll(body: RollCreate) -> dict:
         return store.create_roll(body.buggy, body.driver, body.notes)
 
+    @app.put("/api/rolls/{roll_id}")
+    def update_roll(roll_id: int, body: RollCreate) -> dict:
+        """Replace buggy, driver and notes; a blank driver or notes clears it."""
+        try:
+            return store.update_roll(roll_id, body.buggy, body.driver, body.notes)
+        except NotFound as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.delete("/api/rolls/{roll_id}", status_code=204)
+    def delete_roll(roll_id: int) -> Response:
+        try:
+            store.delete_roll(roll_id)
+        except NotFound as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return Response(status_code=204)
+
     @app.post("/api/files")
     async def upload_file(
         request: Request,

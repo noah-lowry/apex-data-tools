@@ -18,6 +18,7 @@ const state = {
   clockOffset: 0,        // server clock minus this device's clock, in ms
   picks: new Map(),      // file id -> roll id the user chose but has not assigned yet
   renderDeferred: false,
+  editing: null,         // { id, node } of the roll whose inline editor is open
 };
 
 const $ = (id) => document.getElementById(id);
@@ -65,17 +66,28 @@ function duration(sec) {
 
 const metres = (m) => `${Math.round(m).toLocaleString()} m`;
 
-/** Fact spans for a watch file, with problems called out rather than hidden. */
+/** When the roll in a file started: the start-gate crossing, else (labelled)
+    the watch start, else the upload. */
+const rollStart = (f) => f.roll_start_utc || f.start_utc || f.uploaded_utc;
+
+/** Fact spans for a watch file, with problems called out rather than hidden.
+    Figures are for the roll itself, not the whole time the watch was running. */
 function fileFacts(f, { withName = true } = {}) {
   const facts = [];
   if (f.parse_error) facts.push(h("span", { class: "bad" }, "unreadable (raw kept)"));
   else if (!f.point_count) facts.push(h("span", { class: "warn" }, "no GPS"));
-  else {
+  else if (!f.roll_start_utc) {
     facts.push(
-      h("span", { class: "num" }, duration(f.duration_sec)),
-      h("span", { class: "num" }, metres(f.total_dist_m)),
-      h("span", { class: "num" }, `${f.max_speed_mph.toFixed(1)} mph max`),
+      h("span", { class: "warn" }, "no roll detected"),
+      h("span", {}, "watch ran ", h("span", { class: "num" }, duration(f.duration_sec))),
     );
+  } else {
+    facts.push(
+      h("span", { class: "num" }, duration(f.roll_duration_sec)),
+      h("span", { class: "num" }, metres(f.roll_dist_m)),
+      h("span", { class: "num" }, `${f.roll_max_speed_mph.toFixed(1)} mph max`),
+    );
+    if (!f.roll_finished) facts.push(h("span", { class: "warn" }, `partial: lost after ${f.roll_end_gate}`));
   }
   if (f.device_id) {
     facts.push(h("span", {}, `${(f.device_name || "watch").replace(/^Garmin /, "")} `, h("span", { class: "num" }, `…${String(f.device_id).slice(-4)}`)));
@@ -147,12 +159,12 @@ async function refresh() {
     option sits at the top and is always present, roster or no roster, so a name
     nobody has entered yet can always be typed in. */
 class NamePicker {
-  constructor(kind, { noneLabel }) {
+  constructor(kind, { noneLabel, select, row, input }) {
     this.kind = kind;
     this.noneLabel = noneLabel;
-    this.select = $(`roll-${kind}`);
-    this.row = $(`roll-${kind}-new`);
-    this.input = $(`roll-${kind}-name`);
+    this.select = select;
+    this.row = row;       // the inline "new name" field and its buttons
+    this.input = input;
     this.roster = [];     // names from the server, most recently used first
     this.added = [];      // typed here, not on the server's roster until a roll uses them
     this.names = null;    // what the <select> currently lists; null until first built
@@ -240,10 +252,41 @@ class NamePicker {
   get busy() {
     return document.activeElement === this.select;
   }
-}
 
-const buggyPicker = new NamePicker("buggy", { noneLabel: "Choose buggy…" });
-const driverPicker = new NamePicker("driver", { noneLabel: "No driver" });
+  /** A picker that builds its own markup, for forms made in script. Its
+      labelled field is `picker.field`. */
+  static create(kind, { noneLabel, label, required = false }) {
+    const id = `${kind}-picker-${++NamePicker.count}`;
+    const select = h("select", { class: "well", id });
+    const input = h("input", {
+      class: "well", maxlength: 80, autocomplete: "off",
+      "aria-label": `New ${kind} name`, placeholder: `New ${kind} name`,
+    });
+    const row = h("div", { class: "choice", hidden: true },
+      input,
+      h("button", { class: "btn-primary", type: "button", "data-confirm": true }, "Add"),
+      h("button", { class: "btn-quiet", type: "button", "data-cancel": true }, "Cancel"),
+    );
+    const picker = new NamePicker(kind, { noneLabel, select, row, input });
+    picker.field = h("div", { class: "field" },
+      h("label", { class: "field-label", for: id }, label,
+        required ? h("span", { class: "req", "aria-hidden": "true" }, "*") : null),
+      h("span", { class: "select-wrap" }, select),
+      row,
+    );
+    return picker;
+  }
+}
+NamePicker.count = 0;
+
+const pickerFor = (kind, noneLabel) => new NamePicker(kind, {
+  noneLabel,
+  select: $(`roll-${kind}`),
+  row: $(`roll-${kind}-new`),
+  input: $(`roll-${kind}-name`),
+});
+const buggyPicker = pickerFor("buggy", "Choose buggy…");
+const driverPicker = pickerFor("driver", "No driver");
 
 /** Picking a buggy fills in whoever last drove it, which is usually right. */
 function suggestDriver() {
@@ -302,7 +345,7 @@ $("roll-form").addEventListener("submit", async (e) => {
     until Assign is pressed. */
 function suggestRoll(file, rolls) {
   if (!file.buggy) return "";
-  const at = Date.parse(file.start_utc || file.uploaded_utc);
+  const at = Date.parse(rollStart(file));
   const matches = rolls
     .filter((r) => r.buggy.toLowerCase() === file.buggy.toLowerCase() && r.day === file.day)
     .sort((a, b) =>
@@ -348,8 +391,10 @@ function fileItem(file, rolls) {
   return h("li", { class: "item assign-row" },
     h("div", { class: "item-head" },
       h("span", { class: file.buggy ? "item-title" : "item-title faint" }, file.buggy || "No buggy label"),
-      file.start_utc
-        ? when(file.start_utc, relTime(file.start_utc, file.day))
+      file.roll_start_utc
+        ? when(file.roll_start_utc, relTime(file.roll_start_utc, file.day))
+        : file.start_utc
+        ? h("span", { class: "item-when" }, "watch started ", h("span", { class: "num" }, clock(file.start_utc)))
         : h("span", { class: "item-when" }, "uploaded ", h("span", { class: "num" }, clock(file.uploaded_utc))),
     ),
     h("div", { class: "facts" }, fileFacts(file)),
@@ -365,12 +410,17 @@ function rollItem(roll, filesById) {
       h("span", { class: "item-title" }, roll.title),
       when(roll.created_utc, relTime(roll.created_utc, roll.day)),
     ),
-    h("div", { class: "facts" }, h("span", {}, roll.driver ? `Driver: ${roll.driver}` : "No driver")),
+    h("div", { class: "item-row" },
+      h("div", { class: "facts" },
+        h("span", {}, roll.driver ? `Driver: ${roll.driver}` : "No driver"),
+        roll.edited_utc ? h("span", {}, "edited ", h("span", { class: "num" }, clock(roll.edited_utc))) : null),
+      h("button", { class: "btn-quiet small", type: "button", onclick: () => openEditor(roll) }, "Edit"),
+    ),
     roll.notes ? h("p", { class: "notes" }, roll.notes) : null,
     files.length
       ? h("ul", { class: "attached" }, files.map((f) => h("li", {},
           h("div", { class: "facts" },
-            f.start_utc ? h("span", { class: "num" }, clock(f.start_utc)) : null,
+            f.roll_start_utc ? h("span", { class: "num" }, clock(f.roll_start_utc)) : null,
             fileFacts(f)),
           h("button", {
             class: "btn-quiet small", type: "button",
@@ -384,6 +434,107 @@ function rollItem(roll, filesById) {
           }, "Unassign"))))
       : h("p", { class: "no-data" }, "No data assigned yet"),
   );
+}
+
+// ── editing rolls ─────────────────────────────────────────────────────────
+
+/** An inline form replacing a roll's entry: buggy, driver and notes, saved as
+    a whole, or the roll deleted. Its node is kept across re-renders, so a poll
+    never throws away what someone is typing. */
+function rollEditor(roll) {
+  const buggy = NamePicker.create("buggy", { noneLabel: "Choose buggy…", label: "Buggy", required: true });
+  const driver = NamePicker.create("driver", { noneLabel: "No driver", label: "Driver" });
+  buggy.setNames(state.data.roster.buggy);
+  driver.setNames(state.data.roster.driver);
+  buggy.set(roll.buggy);
+  driver.set(roll.driver || "");
+
+  const notesId = `notes-edit-${roll.id}`;
+  const notes = h("textarea", { class: "well", id: notesId, rows: 3, maxlength: 4000 });
+  notes.value = roll.notes;
+  const status = h("span", { class: "status", role: "status", "aria-live": "polite" });
+  const save = h("button", { class: "btn-primary", type: "submit" }, "Save changes");
+  const cancel = h("button", { class: "btn-quiet", type: "button", onclick: closeEditor }, "Cancel");
+  const del = h("button", { class: "btn-quiet danger", type: "button" }, "Delete roll");
+
+  // Deleting takes a second tap within a few seconds; the viewer has no confirm().
+  let armed = null;
+  const disarm = () => { armed = null; del.textContent = "Delete roll"; del.classList.remove("armed"); };
+  del.addEventListener("click", async () => {
+    if (!armed) {
+      del.textContent = "Tap again to delete";
+      del.classList.add("armed");
+      armed = setTimeout(disarm, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    del.disabled = true;
+    try {
+      await api("DELETE", `/api/rolls/${roll.id}`);
+      closeEditor();
+    } catch (err) {
+      disarm();
+      del.disabled = false;
+      status.textContent = `Not deleted: ${err.message}.`;
+      status.className = "status bad";
+    }
+    state.dataKey = "";
+    await refresh();
+  });
+
+  const form = h("form", { class: "form", novalidate: true },
+    h("div", { class: "form-pair" }, buggy.field, driver.field),
+    h("div", { class: "field" }, h("label", { class: "field-label", for: notesId }, "Notes"), notes),
+    h("div", { class: "form-foot" }, save, cancel, h("span", { class: "spacer" }), del),
+    status,
+  );
+  form.addEventListener("focusout", flushDeferredRender);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!buggy.value) {
+      status.textContent = "A roll needs a buggy.";
+      status.className = "status bad";
+      return;
+    }
+    save.disabled = true;
+    status.textContent = "Saving…";
+    status.className = "status";
+    try {
+      await api("PUT", `/api/rolls/${roll.id}`, {
+        buggy: buggy.value, driver: driver.value, notes: notes.value,
+      });
+      closeEditor();
+      state.dataKey = "";
+      await refresh();
+    } catch (err) {
+      status.textContent = `Not saved: ${err.message}.`;
+      status.className = "status bad";
+      save.disabled = false;
+    }
+  });
+
+  return h("li", { class: "item editing" },
+    h("div", { class: "item-head" },
+      h("span", { class: "item-title" }, `Editing ${roll.title}`),
+      when(roll.created_utc, relTime(roll.created_utc, roll.day))),
+    form,
+  );
+}
+
+function openEditor(roll) {
+  state.editing = { id: roll.id, node: rollEditor(roll) };
+  render();
+  state.editing.node.scrollIntoView({ block: "nearest" });
+}
+
+function closeEditor() {
+  state.editing = null;
+  render();
+}
+
+/** True while focus is inside the open editor; moving its node would drop focus. */
+function editorBusy() {
+  return Boolean(state.editing?.node.contains(document.activeElement));
 }
 
 // ── render ────────────────────────────────────────────────────────────────
@@ -401,7 +552,7 @@ function flushDeferredRender() {
 function render() {
   const data = state.data;
   if (!data) return;
-  if (listBusy() || buggyPicker.busy || driverPicker.busy) {
+  if (listBusy() || buggyPicker.busy || driverPicker.busy || editorBusy()) {
     state.renderDeferred = true;
     return;
   }
@@ -422,7 +573,9 @@ function render() {
   meta.classList.toggle("warn", unassigned.length > 0);
 
   const filesById = new Map(data.files.map((f) => [f.id, f]));
-  $("roll-list").replaceChildren(...data.rolls.map((r) => rollItem(r, filesById)));
+  if (state.editing && !data.rolls.some((r) => r.id === state.editing.id)) state.editing = null;
+  $("roll-list").replaceChildren(...data.rolls.map((r) =>
+    r.id === state.editing?.id ? state.editing.node : rollItem(r, filesById)));
   $("roll-empty").hidden = data.rolls.length > 0;
   const missing = data.rolls.filter((r) => !r.file_ids.length).length;
   $("rolls-meta").textContent = data.rolls.length

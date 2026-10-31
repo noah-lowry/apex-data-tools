@@ -45,6 +45,8 @@ def test_ingest_parses_and_keeps_raw_bytes(store):
     assert status == "created"
     assert f["point_count"] == 710 and f["parse_error"] is None
     assert f["start_utc"].startswith("2026-10-03T11:31:20")
+    assert f["roll_start_utc"].startswith("2026-10-03T11:38:53")
+    assert f["roll_finished"] == 1 and 60 < f["roll_duration_sec"] < 70
     assert f["day"] == local_day(datetime.fromisoformat(f["start_utc"]))
     assert store.raw_path(f["sha256"]).read_bytes() == content
 

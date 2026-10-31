@@ -5,7 +5,10 @@ order of rolls. Roll numbers ("Solaris Roll 3") are the rank of a roll among
 that buggy's rolls on its local day; they are computed on read, never stored.
 
 Raw FIT bytes are kept content-addressed under `raw/`, so every run can be
-re-parsed from the original file later. SQLite holds only a summary of each.
+re-parsed from the original file later. SQLite holds only a summary of each:
+the whole recording (`start_utc`, `duration_sec`, ...) and, separately, the roll
+found inside it (`roll_*`), which is what people care about. The watch runs for
+minutes either side of the roll, so the two differ a lot.
 """
 
 import hashlib
@@ -17,7 +20,8 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from apex.parsing import GarminParser
+from apex.parsing import GarminParser, default_course, detect_roll
+from apex.parsing.schema import CourseSpec
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS buggy (
@@ -37,6 +41,7 @@ CREATE TABLE IF NOT EXISTS roll (
     notes TEXT NOT NULL DEFAULT '',
     created_utc TEXT NOT NULL,
     day TEXT NOT NULL  -- server-local date the roll was created
+    -- plus edited_utc, added by Store._migrate
 );
 CREATE TABLE IF NOT EXISTS watch_file (
     id INTEGER PRIMARY KEY,
@@ -45,6 +50,7 @@ CREATE TABLE IF NOT EXISTS watch_file (
     buggy TEXT,  -- free-text label from collect-rolls, not a roster entry
     device_id TEXT,
     device_name TEXT,
+    -- the whole recording, watch start to watch stop
     start_utc TEXT,
     end_utc TEXT,
     duration_sec REAL,
@@ -56,6 +62,7 @@ CREATE TABLE IF NOT EXISTS watch_file (
     day TEXT NOT NULL,  -- server-local date of the recording (upload, if unknown)
     roll_id INTEGER REFERENCES roll(id),
     assigned_utc TEXT
+    -- plus ROLL_COLUMNS, added by Store._migrate
 );
 CREATE INDEX IF NOT EXISTS roll_day ON roll(day);
 CREATE INDEX IF NOT EXISTS watch_file_day ON watch_file(day);
@@ -69,17 +76,33 @@ WITH numbered AS (
     ) AS number
     FROM roll r
 )
-SELECT n.id, n.notes, n.created_utc, n.day, n.number,
+SELECT n.id, n.notes, n.created_utc, n.edited_utc, n.day, n.number,
        b.name AS buggy, d.name AS driver
 FROM numbered n
 JOIN buggy b ON b.id = n.buggy_id
 LEFT JOIN driver d ON d.id = n.driver_id
 """
 
-FILE_COLUMNS = (
-    "id, sha256, filename, buggy, device_id, device_name, start_utc, end_utc, "
-    "duration_sec, total_dist_m, max_speed_mph, point_count, parse_error, "
-    "uploaded_utc, day, roll_id, assigned_utc"
+# The roll inside the recording, from the start-gate crossing to the last gate
+# crossed. All null when no roll was detected.
+ROLL_COLUMNS = {
+    "roll_start_utc": "TEXT",
+    "roll_end_utc": "TEXT",
+    "roll_duration_sec": "REAL",
+    "roll_dist_m": "REAL",
+    "roll_max_speed_mph": "REAL",
+    "roll_end_gate": "TEXT",  # name of the last gate crossed
+    "roll_finished": "INTEGER",  # 1 if that was the course's final gate
+    "roll_analyzed": "INTEGER NOT NULL DEFAULT 0",  # detection has run on this row
+}
+
+FILE_COLUMNS = ", ".join(
+    [
+        "id", "sha256", "filename", "buggy", "device_id", "device_name", "start_utc",
+        "end_utc", "duration_sec", "total_dist_m", "max_speed_mph", "point_count",
+        "parse_error", "uploaded_utc", "day", "roll_id", "assigned_utc",
+        *(c for c in ROLL_COLUMNS if c != "roll_analyzed"),
+    ]
 )
 
 
@@ -109,13 +132,43 @@ def roll_title(buggy: str, number: int, day: str) -> str:
 
 
 class Store:
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, course: CourseSpec | None = None):
         self.data_dir = data_dir
         self.raw_dir = data_dir / "raw"
         self.db_path = data_dir / "apex.db"
+        self.course = course or default_course()
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+        self._backfill_rolls()
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Add columns introduced since a database was created."""
+        added = {"watch_file": ROLL_COLUMNS, "roll": {"edited_utc": "TEXT"}}
+        for table, columns in added.items():
+            have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for name, decl in columns.items():
+                if name not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+    def _backfill_rolls(self) -> None:
+        """Run roll detection on files stored before it existed, from their raw bytes."""
+        with self._connect() as conn:
+            pending = conn.execute(
+                "SELECT id, sha256 FROM watch_file WHERE roll_analyzed = 0"
+            ).fetchall()
+        for row in pending:
+            path = self.raw_path(row["sha256"])
+            summary = self._analyze(path) if path.exists() else {}
+            roll = {k: v for k, v in summary.items() if k in ROLL_COLUMNS}
+            roll["roll_analyzed"] = 1
+            with self._connect() as conn:
+                conn.execute(
+                    f"UPDATE watch_file SET {', '.join(f'{k} = ?' for k in roll)} WHERE id = ?",
+                    [*roll.values(), row["id"]],
+                )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -133,13 +186,18 @@ class Store:
     # ── roster ───────────────────────────────────────────────────────────────
 
     def roster(self) -> dict[str, list[str]]:
-        """Every buggy and driver name ever entered, most recently used first."""
+        """Buggy and driver names in use by some roll, most recently used first.
+
+        Only names a roll still uses: a typo corrected by editing drops out.
+        """
         with self._connect() as conn:
             return {
                 table: [
                     row["name"]
                     for row in conn.execute(
-                        f"SELECT name FROM {table} ORDER BY last_used_utc DESC, name"
+                        f"SELECT name FROM {table} t WHERE EXISTS "
+                        f"(SELECT 1 FROM roll WHERE roll.{table}_id = t.id) "
+                        "ORDER BY last_used_utc DESC, name"
                     )
                 ]
                 for table in ("buggy", "driver")
@@ -172,6 +230,39 @@ class Store:
             ).lastrowid
         return self.get_roll(roll_id)
 
+    def update_roll(
+        self,
+        roll_id: int,
+        buggy: str,
+        driver: str | None = None,
+        notes: str = "",
+        now: datetime | None = None,
+    ) -> dict:
+        """Replace a roll's buggy, driver and notes. Its timestamp, and so its
+        place in the order, is unchanged; its number follows the new buggy."""
+        stamp = _iso(now or _utc_now())
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM roll WHERE id = ?", (roll_id,)).fetchone() is None:
+                raise NotFound(f"no roll {roll_id}")
+            buggy_id = self._resolve_name(conn, "buggy", buggy, stamp)
+            driver_id = self._resolve_name(conn, "driver", driver, stamp) if driver else None
+            conn.execute(
+                "UPDATE roll SET buggy_id = ?, driver_id = ?, notes = ?, edited_utc = ? "
+                "WHERE id = ?",
+                (buggy_id, driver_id, notes, stamp, roll_id),
+            )
+        return self.get_roll(roll_id)
+
+    def delete_roll(self, roll_id: int) -> None:
+        """Remove a roll; any data assigned to it becomes unassigned again."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE watch_file SET roll_id = NULL, assigned_utc = NULL WHERE roll_id = ?",
+                (roll_id,),
+            )
+            if not conn.execute("DELETE FROM roll WHERE id = ?", (roll_id,)).rowcount:
+                raise NotFound(f"no roll {roll_id}")
+
     def get_roll(self, roll_id: int) -> dict:
         rolls = self.list_rolls(roll_id=roll_id)
         if not rolls:
@@ -198,7 +289,7 @@ class Store:
                 marks = ",".join("?" * len(ids))
                 for f in conn.execute(
                     f"SELECT id, roll_id FROM watch_file WHERE roll_id IN ({marks}) "
-                    "ORDER BY start_utc, id",
+                    "ORDER BY COALESCE(roll_start_utc, start_utc), id",
                     ids,
                 ):
                     files[f["roll_id"]].append(f["id"])
@@ -240,25 +331,9 @@ class Store:
         if not path.exists():
             _atomic_write(path, content)
 
-        summary: dict = {"point_count": 0, "parse_error": None}
-        day = local_day(moment)
-        try:
-            roll = GarminParser.parse_fit(str(path))
-        except Exception as exc:  # a truncated or corrupt file is still kept raw
-            summary["parse_error"] = f"{type(exc).__name__}: {exc}"
-        else:
-            summary.update(
-                device_id=roll.device_id,
-                device_name=roll.device_name,
-                start_utc=_iso(roll.start_time) if roll.start_time else None,
-                end_utc=_iso(roll.end_time) if roll.end_time else None,
-                duration_sec=roll.duration_sec,
-                total_dist_m=roll.total_dist_m,
-                max_speed_mph=roll.max_speed_mph,
-                point_count=roll.point_count,
-            )
-            if roll.start_time:
-                day = local_day(roll.start_time)
+        summary = self._analyze(path)
+        start = summary.get("roll_start_utc") or summary.get("start_utc")
+        day = local_day(datetime.fromisoformat(start)) if start else local_day(moment)
 
         columns = {
             "sha256": sha,
@@ -279,6 +354,37 @@ class Store:
             # Lost a race with a concurrent upload of the same bytes.
             return self.ingest_file(content, filename, buggy, now)
         return "created", self._file_by_sha(sha)
+
+    def _analyze(self, path: Path) -> dict:
+        """Summary columns for a stored FIT file: the recording, and the roll in it."""
+        summary: dict = {"point_count": 0, "parse_error": None, "roll_analyzed": 1}
+        try:
+            recording = GarminParser.parse_fit(str(path))
+        except Exception as exc:  # a truncated or corrupt file is still kept raw
+            summary["parse_error"] = f"{type(exc).__name__}: {exc}"
+            return summary
+
+        summary.update(
+            device_id=recording.device_id,
+            device_name=recording.device_name,
+            start_utc=_iso(recording.start_time) if recording.start_time else None,
+            end_utc=_iso(recording.end_time) if recording.end_time else None,
+            duration_sec=recording.duration_sec,
+            total_dist_m=recording.total_dist_m,
+            max_speed_mph=recording.max_speed_mph,
+            point_count=recording.point_count,
+        )
+        if window := detect_roll(recording, self.course):
+            summary.update(
+                roll_start_utc=_iso(window.start_time),
+                roll_end_utc=_iso(window.end_time),
+                roll_duration_sec=window.duration_sec,
+                roll_dist_m=window.distance_m,
+                roll_max_speed_mph=window.max_speed_mph,
+                roll_end_gate=window.end_gate,
+                roll_finished=int(window.finished),
+            )
+        return summary
 
     def _file_by_sha(self, sha: str) -> dict | None:
         with self._connect() as conn:
@@ -304,7 +410,7 @@ class Store:
         if day is not None:
             sql += " WHERE day = ? OR roll_id IN (SELECT id FROM roll WHERE day = ?)"
             params = [day, day]
-        sql += " ORDER BY COALESCE(start_utc, uploaded_utc) DESC, id DESC"
+        sql += " ORDER BY COALESCE(roll_start_utc, start_utc, uploaded_utc) DESC, id DESC"
         with self._connect() as conn:
             return [dict(r) for r in conn.execute(sql, params)]
 

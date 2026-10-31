@@ -195,6 +195,7 @@ STATUS_STYLE = {
 
 
 def _outcome_row(outcome) -> list:
+    """Table cells for one file. Times and figures are the roll's, not the watch's."""
     label, style = STATUS_STYLE[outcome.status]
     cells = [Text(label, style), outcome.file.path.name]
     blank = ["", "", "", ""]
@@ -205,17 +206,27 @@ def _outcome_row(outcome) -> list:
         return [*cells, *blank, Text("unreadable; raw file kept", "yellow")]
     if not stored["point_count"]:
         return [*cells, *blank, Text("no GPS points", "yellow")]
+    if not stored["roll_start_utc"]:
+        ran = _clock_duration(stored["duration_sec"])
+        return [*cells, *blank, Text(f"no roll detected (watch ran {ran})", "yellow")]
 
-    start = datetime.fromisoformat(stored["start_utc"]).astimezone()
-    minutes, seconds = divmod(int(stored["duration_sec"] or 0), 60)
+    start = datetime.fromisoformat(stored["roll_start_utc"]).astimezone()
+    note = Text(stored["buggy"] or "", "dim")
+    if not stored["roll_finished"]:
+        note = Text(f"partial: lost after {stored['roll_end_gate']}", "yellow")
     return [
         *cells,
-        f"{start:%H:%M}",
-        f"{minutes}:{seconds:02d}",
-        f"{stored['total_dist_m']:,.0f} m",
-        f"{stored['max_speed_mph']:.1f} mph",
-        Text(stored["buggy"] or "", "dim"),
+        f"{start:%H:%M:%S}",
+        _clock_duration(stored["roll_duration_sec"]),
+        f"{stored['roll_dist_m']:,.0f} m",
+        f"{stored['roll_max_speed_mph']:.1f} mph",
+        note,
     ]
+
+
+def _clock_duration(seconds: float | None) -> str:
+    minutes, secs = divmod(round(seconds or 0), 60)
+    return f"{minutes}:{secs:02d}"
 
 
 @app.command("collect-rolls")
@@ -293,8 +304,8 @@ def collect_rolls(
     for name, justify in [
         ("", "left"),
         ("file", "left"),
-        ("start", "right"),
-        ("time", "right"),
+        ("roll start", "right"),
+        ("duration", "right"),
         ("distance", "right"),
         ("max", "right"),
         ("", "left"),
