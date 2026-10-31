@@ -1,7 +1,8 @@
-import os
 import math
+import os
 from datetime import datetime, timezone
 from typing import Any, Optional
+
 import fitparse
 
 from .schema import RollData, RollPoint
@@ -20,7 +21,10 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    )
     return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
@@ -29,13 +33,14 @@ def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> flo
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dlambda = math.radians(lon2 - lon1)
     y = math.sin(dlambda) * math.cos(phi2)
-    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(
+        dlambda
+    )
     bearing = math.degrees(math.atan2(y, x))
     return (bearing + 360.0) % 360.0
 
 
 class GarminParser:
-
     @staticmethod
     def parse_file(filepath: str) -> RollData:
         ext = os.path.splitext(filepath)[1].lower()
@@ -105,30 +110,29 @@ class GarminParser:
             dist = record_dict.get("distance", 0.0)
             dist = float(dist) if dist is not None else 0.0
 
-            records.append(RollPoint(
-                timestamp=ts,
-                elapsed_sec=t_sec,
-                lat=round(deg_lat, 7),
-                lon=round(deg_lon, 7),
-                speed_mps=round(speed_mps, 3),
-                speed_mph=round(speed_mph, 2),
-                altitude_m=round(alt, 1),
-                garmin_dist_m=round(dist, 1),
-            ))
+            records.append(
+                RollPoint(
+                    timestamp=ts,
+                    elapsed_sec=t_sec,
+                    lat=round(deg_lat, 7),
+                    lon=round(deg_lon, 7),
+                    speed_mps=round(speed_mps, 3),
+                    speed_mph=round(speed_mph, 2),
+                    altitude_m=round(alt, 1),
+                    garmin_dist_m=round(dist, 1),
+                )
+            )
 
         return GarminParser._post_process_records(
             records=records,
             source_file=filepath,
             device_id=device_serial or "watch_default",
-            device_name=device_name
+            device_name=device_name,
         )
 
     @staticmethod
     def _post_process_records(
-        records: list[RollPoint],
-        source_file: str,
-        device_id: str,
-        device_name: str
+        records: list[RollPoint], source_file: str, device_id: str, device_name: str
     ) -> RollData:
         """Compute cumulative distance, bearings, and basic filtering."""
         if not records:
@@ -147,7 +151,9 @@ class GarminParser:
             d = haversine_distance(prev.lat, prev.lon, curr.lat, curr.lon)
             cum_dist += d
             curr.cum_dist_m = round(cum_dist, 2)
-            curr.bearing_deg = round(calculate_bearing(prev.lat, prev.lon, curr.lat, curr.lon), 1)
+            curr.bearing_deg = round(
+                calculate_bearing(prev.lat, prev.lon, curr.lat, curr.lon), 1
+            )
 
             # If speed wasn't natively supplied in record, calculate finite-diff speed
             dt = curr.elapsed_sec - prev.elapsed_sec

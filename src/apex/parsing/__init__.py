@@ -1,4 +1,4 @@
+from .course_segmenter import RollSegmenter
 from .garmin_parser import GarminParser
-from .schema import RollData, RollPoint
 
-__all__ = ["GarminParser", "RollData", "RollPoint"]
+__all__ = ["GarminParser", "RollSegmenter"]
