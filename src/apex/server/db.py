@@ -12,6 +12,7 @@ minutes either side of the roll, so the two differ a lot.
 """
 
 import hashlib
+import json
 import os
 import sqlite3
 import tempfile
@@ -20,6 +21,7 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from apex.analysis import ANALYSIS_VERSION, analyze
 from apex.parsing import GarminParser, default_course, detect_roll
 from apex.parsing.schema import CourseSpec
 
@@ -67,6 +69,13 @@ CREATE TABLE IF NOT EXISTS watch_file (
 CREATE INDEX IF NOT EXISTS roll_day ON roll(day);
 CREATE INDEX IF NOT EXISTS watch_file_day ON watch_file(day);
 CREATE INDEX IF NOT EXISTS watch_file_roll ON watch_file(roll_id);
+-- Derived from the raw file by apex.analysis; recomputed when its version changes.
+CREATE TABLE IF NOT EXISTS file_analysis (
+    file_id INTEGER PRIMARY KEY REFERENCES watch_file(id),
+    version INTEGER NOT NULL,
+    summary TEXT,  -- JSON; NULL when the recording holds no roll
+    detail TEXT    -- JSON: summary plus trace and gate crossings
+);
 """
 
 # Every roll with the time it happened. Once data is assigned, that is the
@@ -165,6 +174,7 @@ class Store:
             conn.executescript(SCHEMA)
             self._migrate(conn)
         self._backfill_rolls()
+        self._backfill_analysis()
 
     @staticmethod
     def _migrate(conn: sqlite3.Connection) -> None:
@@ -184,7 +194,7 @@ class Store:
             ).fetchall()
         for row in pending:
             path = self.raw_path(row["sha256"])
-            summary = self._analyze(path) if path.exists() else {}
+            summary = self._analyze(path)[0] if path.exists() else {}
             roll = {k: v for k, v in summary.items() if k in ROLL_COLUMNS}
             roll["roll_analyzed"] = 1
             with self._connect() as conn:
@@ -192,6 +202,58 @@ class Store:
                     f"UPDATE watch_file SET {', '.join(f'{k} = ?' for k in roll)} WHERE id = ?",
                     [*roll.values(), row["id"]],
                 )
+
+    def _backfill_analysis(self) -> None:
+        """Analyze files that have no analysis yet, or one from an older version."""
+        with self._connect() as conn:
+            pending = conn.execute(
+                "SELECT w.id, w.sha256 FROM watch_file w "
+                "LEFT JOIN file_analysis a ON a.file_id = w.id "
+                "WHERE w.parse_error IS NULL AND (a.file_id IS NULL OR a.version != ?)",
+                (ANALYSIS_VERSION,),
+            ).fetchall()
+        for row in pending:
+            path = self.raw_path(row["sha256"])
+            if path.exists():
+                self._save_analysis(row["id"], self._analyze(path)[1])
+
+    def _save_analysis(self, file_id: int, analysis: tuple[dict, dict] | None) -> None:
+        summary, detail = analysis if analysis else (None, None)
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO file_analysis (file_id, version, summary, detail) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(file_id) DO UPDATE SET version = excluded.version, "
+                "summary = excluded.summary, detail = excluded.detail",
+                (
+                    file_id,
+                    ANALYSIS_VERSION,
+                    json.dumps(summary) if summary else None,
+                    json.dumps(detail) if detail else None,
+                ),
+            )
+
+    def roll_analyses(self) -> dict[int, dict]:
+        """{roll id: {"file_id", "summary"}} for every roll whose data holds a roll.
+
+        Should an older database pair several files with one roll, the one whose
+        roll started first is used, matching how the roll is timed.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT w.roll_id, w.id AS file_id, a.summary FROM watch_file w "
+                "JOIN file_analysis a ON a.file_id = w.id "
+                "WHERE w.roll_id IS NOT NULL AND a.summary IS NOT NULL "
+                "ORDER BY w.roll_start_utc DESC"
+            ).fetchall()
+        # Later rows overwrite earlier ones, so the earliest roll start wins.
+        return {r["roll_id"]: {"file_id": r["file_id"], "summary": json.loads(r["summary"])} for r in rows}
+
+    def analysis_detail(self, file_id: int) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT detail FROM file_analysis WHERE file_id = ?", (file_id,)
+            ).fetchone()
+        return json.loads(row["detail"]) if row and row["detail"] else None
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -356,7 +418,7 @@ class Store:
         if not path.exists():
             _atomic_write(path, content)
 
-        summary = self._analyze(path)
+        summary, analysis = self._analyze(path)
         start = summary.get("roll_start_utc") or summary.get("start_utc")
         day = local_day(datetime.fromisoformat(start)) if start else local_day(moment)
 
@@ -378,16 +440,20 @@ class Store:
         if not inserted:
             # Lost a race with a concurrent upload of the same bytes.
             return self.ingest_file(content, filename, buggy, now)
-        return "created", self._file_by_sha(sha)
+        stored = self._file_by_sha(sha)
+        if summary["parse_error"] is None:
+            self._save_analysis(stored["id"], analysis)
+        return "created", stored
 
-    def _analyze(self, path: Path) -> dict:
-        """Summary columns for a stored FIT file: the recording, and the roll in it."""
+    def _analyze(self, path: Path) -> tuple[dict, tuple[dict, dict] | None]:
+        """Parse a stored FIT file once: its summary columns (the recording, and
+        the roll in it), and its doomscROLL analysis (None if it holds no roll)."""
         summary: dict = {"point_count": 0, "parse_error": None, "roll_analyzed": 1}
         try:
             recording = GarminParser.parse_fit(str(path))
         except Exception as exc:  # a truncated or corrupt file is still kept raw
             summary["parse_error"] = f"{type(exc).__name__}: {exc}"
-            return summary
+            return summary, None
 
         summary.update(
             device_id=recording.device_id,
@@ -409,7 +475,7 @@ class Store:
                 roll_end_gate=window.end_gate,
                 roll_finished=int(window.finished),
             )
-        return summary
+        return summary, analyze(recording, self.course)
 
     def _file_by_sha(self, sha: str) -> dict | None:
         with self._connect() as conn:

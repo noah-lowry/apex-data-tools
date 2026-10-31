@@ -4,6 +4,8 @@
  * This page polls one endpoint and re-renders from it, so several phones and
  * the laptop running `apex collect-rolls` all converge on the same view. A
  * re-render never happens under an open <select>, which would close it.
+ *
+ * Shared helpers (h, api, formatting, routing) live in common.js.
  */
 "use strict";
 
@@ -21,30 +23,9 @@ const state = {
   editing: null,         // { id, node } of the roll whose inline editor is open
 };
 
-const $ = (id) => document.getElementById(id);
-
-/** Build an element. Children are nodes or strings; never parsed as HTML. */
-function h(tag, attrs = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === null || v === undefined || v === false) continue;
-    if (k === "class") el.className = v;
-    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
-    else el.setAttribute(k, v === true ? "" : v);
-  }
-  el.append(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
-  return el;
-}
-
 // ── formatting ────────────────────────────────────────────────────────────
 
 const serverNow = () => Date.now() + state.clockOffset;
-
-const clock = (iso) =>
-  new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-
-const dayLabel = (day, opts = { weekday: "long", month: "numeric", day: "numeric" }) =>
-  new Date(`${day}T12:00:00`).toLocaleDateString([], opts);
 
 /** "12 minutes ago" today; the date for anything older. */
 function relTime(iso, day) {
@@ -57,14 +38,6 @@ function relTime(iso, day) {
   if (m < 60) return `${m} minutes ago`;
   return `${Math.floor(m / 60)} h ${m % 60} min ago`;
 }
-
-function duration(sec) {
-  const s = Math.round(sec || 0);
-  const mm = Math.floor(s / 60), ss = String(s % 60).padStart(2, "0");
-  return mm >= 60 ? `${Math.floor(mm / 60)}:${String(mm % 60).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
-}
-
-const metres = (m) => `${Math.round(m).toLocaleString()} m`;
 
 /** When the roll in a file started: the start-gate crossing, else (labelled)
     the watch start, else the upload. */
@@ -101,36 +74,6 @@ const when = (iso, rel) =>
   h("span", { class: "item-when" }, h("span", { class: "num" }, clock(iso)), ` · ${rel}`);
 
 const rollLabel = (r) => `${r.buggy} roll ${r.number} (${relTime(r.at_utc, r.day)})`;
-
-// ── server ────────────────────────────────────────────────────────────────
-
-async function api(method, path, body) {
-  let res;
-  try {
-    res = await fetch(path, {
-      method,
-      cache: "no-store",
-      headers: body ? { "Content-Type": "application/json" } : {},
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch {
-    throw new Error("Couldn't reach the server");
-  }
-  if (res.status === 401) {
-    location.href = "/login";
-    throw new Error("Signed out");
-  }
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const detail = Array.isArray(payload.detail)
-      ? payload.detail.map((d) => d.msg).join("; ")
-      : payload.detail;
-    const err = new Error(detail || `Server error ${res.status}`);
-    err.status = res.status;
-    throw err;
-  }
-  return payload;
-}
 
 async function refresh() {
   const sync = $("sync");
@@ -595,26 +538,9 @@ document.querySelectorAll("[data-scope]").forEach((btn) =>
     refresh();
   }));
 
-$("theme-toggle").addEventListener("click", () => {
-  const root = document.documentElement;
-  root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
-  try { localStorage.setItem("apex-theme", root.dataset.theme); } catch {}
-});
-
-/** Show the panel named by the hash; tabs other than Collection come later. */
-function showTab() {
-  const name = location.hash.slice(1) || "collection";
-  const known = document.querySelector(`[data-panel="${CSS.escape(name)}"]`) ? name : "collection";
-  document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== known; });
-  document.querySelectorAll("[data-tab]").forEach((t) =>
-    t.dataset.tab === known ? t.setAttribute("aria-current", "page") : t.removeAttribute("aria-current"));
-}
-window.addEventListener("hashchange", showTab);
-showTab();
-
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") refresh();
-});
-setInterval(() => { if (document.visibilityState === "visible") refresh(); }, POLL_MS);
-setInterval(render, TICK_MS);  // keeps "n minutes ago" current
-refresh();
+// Poll only while this tab is on screen; coming back to it refreshes at once.
+const collectionShowing = () => document.visibilityState === "visible" && currentRoute().tab === "collection";
+onRoute("collection", () => refresh());
+document.addEventListener("visibilitychange", () => { if (collectionShowing()) refresh(); });
+setInterval(() => { if (collectionShowing()) refresh(); }, POLL_MS);
+setInterval(() => { if (collectionShowing()) render(); }, TICK_MS);  // keeps "n minutes ago" current

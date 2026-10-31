@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 from apex.config import clear_server_info, write_server_info
 
+from . import doomscroll
 from .auth import Auth, PasswordGate, client_key, safe_next, set_session
 from .db import Conflict, NotFound, Store, local_day
 
@@ -147,6 +148,34 @@ def create_app(*, password: str, data_dir: Path, advertise_url: str | None = Non
         except NotFound as exc:
             raise HTTPException(404, str(exc)) from exc
         return Response(status_code=204)
+
+    # ── doomscROLL (read-only) ────────────────────────────────────────────────
+
+    @app.get("/api/course")
+    def course() -> dict:
+        return doomscroll.course_info(store.course)
+
+    @app.get("/api/feed")
+    def feed(
+        buggy: str | None = None,
+        driver: str | None = None,
+        day: str | None = None,
+        all: bool = False,
+        cursor: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=doomscroll.MAX_PAGE_SIZE)] = doomscroll.PAGE_SIZE,
+    ) -> dict:
+        """Roll cards, newest first; the first page also carries the leaderboard."""
+        return doomscroll.feed(
+            store, buggy=buggy, driver=driver, day=day,
+            include_no_data=all, cursor=cursor, limit=limit,
+        )
+
+    @app.get("/api/rolls/{roll_id}/analysis")
+    def roll_analysis(roll_id: int) -> dict:
+        try:
+            return doomscroll.roll_analysis(store, roll_id)
+        except NotFound as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @app.post("/api/files")
     async def upload_file(

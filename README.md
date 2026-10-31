@@ -85,6 +85,48 @@ its number and day follow from that. So entries logged late or out of order stil
 numbered in the order the rolls actually ran. The entry time stays visible as "logged …".
 Buggy, driver and notes always come from the entry, never from the file's buggy label.
 
+## doomscROLL
+
+The analysis tab. It's a feed of every roll that has data, newest first, filterable by
+buggy, driver and day.
+
+**Cards.** Each card shows the roll's time, a speed trace coloured by segment, and its
+split for each segment with the gap to that buggy's best roll. Badges mark a buggy's
+**PB**, the **fastest of the day**, a **partial** roll (GPS lost before the finish), or a
+roll that **stopped** on the course.
+
+**Leaderboard.** It sits above the feed and follows the filters. It lists the fastest
+rolls, the record for each segment, and each buggy's best, median and *theoretical best*
+(the sum of its best segment times).
+
+**Roll page.** Tap a card to open it:
+
+- **Scoreboard and ranks:** where the roll places for its buggy, overall and on that day.
+- **Splits table:** each segment's time, entry/exit/min/max speed, speed gained or
+  lost, and heading change.
+- **Speed trace:** the roll's speed along the course, with a comparison roll overlaid.
+- **Time-gap trace:** where time was won and lost against the comparison.
+- **Map:** the track coloured by speed, following the chart cursor.
+- **Segment deep dive:** for any one segment, its own speed trace and map, every time
+  the buggy has posted there, and whether carrying more entry speed paid off.
+
+Rolls are compared with the buggy's best by default; pick any other roll instead. Both
+traces are aligned at every gate, so the gap is exact there.
+
+How far to trust the numbers:
+
+- **Gate times** are interpolated at the exact crossing, so splits are precise.
+- **Speeds** are the watch's Doppler readings.
+- **Sampling** is one sample per second, so a short segment like the Chute has only
+  about 9 samples. Its speed curve between samples is not known, and the page says so.
+- **Bad GPS:** segments marked "bad GPS" (tree cover) are flagged throughout.
+- **Map tiles** come from OpenStreetMap. Offline, the map still draws the track and
+  gates on a plain background.
+
+Analyses are computed from the stored raw files at ingest. When the analysis code
+changes (`ANALYSIS_VERSION` in `src/apex/analysis.py`), every stored file is re-analysed
+the next time the server starts.
+
 ## Data
 
 Everything lives in `~/.local/share/apex` (override with `--data-dir` or

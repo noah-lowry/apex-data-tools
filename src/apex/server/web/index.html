@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>APEX · Collection</title>
+  <title>APEX</title>
+  <link rel="stylesheet" href="/static/vendor/uplot/uPlot.min.css">
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/apex.css">
   <script>
     try {
@@ -20,9 +22,9 @@
     <span>APEX</span>
   </a>
 
-  <!-- One tab for now; analysis tabs join this list later. -->
   <nav class="tabs" aria-label="Tools">
     <a class="tab" href="#collection" data-tab="collection" aria-current="page">Collection</a>
+    <a class="tab" href="#doomscroll" data-tab="doomscroll">doomsc<span class="roll-word">ROLL</span></a>
   </nav>
 
   <div class="topbar-actions">
@@ -114,6 +116,52 @@
 
 </main>
 
+<!-- doomscROLL: a feed of analysed rolls, and a page per roll. -->
+<main id="tab-doomscroll" data-panel="doomscroll" hidden>
+
+  <div id="doom-feed">
+    <header class="doom-head">
+      <h1 class="doom-title">doomsc<span class="roll-word">ROLL</span></h1>
+      <p class="doom-sub">Every analysed roll, newest first. Tap one for the full breakdown.</p>
+    </header>
+
+    <form class="doom-filters" id="doom-filters">
+      <label class="field">
+        <span class="field-label">Buggy</span>
+        <span class="select-wrap"><select class="well" name="buggy"></select></span>
+      </label>
+      <label class="field">
+        <span class="field-label">Driver</span>
+        <span class="select-wrap"><select class="well" name="driver"></select></span>
+      </label>
+      <label class="field">
+        <span class="field-label">Day</span>
+        <span class="select-wrap"><select class="well" name="day"></select></span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="all"> Show rolls without data
+      </label>
+    </form>
+
+    <details class="board" id="doom-board" open>
+      <summary><h2>Leaderboard</h2><span class="block-meta" id="board-meta"></span></summary>
+      <div class="board-grid" id="board"></div>
+    </details>
+
+    <div class="feed" id="doom-cards" aria-live="polite"></div>
+    <p class="empty-note" id="doom-empty" hidden>No rolls match these filters.</p>
+    <div class="feed-more" id="doom-more" hidden>
+      <button class="btn-quiet" type="button">Load more</button>
+    </div>
+  </div>
+
+  <div id="doom-roll" hidden></div>
+</main>
+
+<script src="/static/vendor/uplot/uPlot.iife.min.js"></script>
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/common.js"></script>
 <script src="/static/collection.js"></script>
+<script src="/static/doomscroll.js"></script>
 </body>
 </html>

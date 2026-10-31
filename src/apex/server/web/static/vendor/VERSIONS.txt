@@ -1,0 +1,11 @@
+leaflet 1.9.4   (BSD-2-Clause)
+uplot   1.6.32  (MIT)
+plex    IBM Plex Sans 400/500 and IBM Plex Mono 400/500, latin subset, woff2, from
+        @fontsource/ibm-plex-sans and @fontsource/ibm-plex-mono 5.3.0. SIL Open Font
+        License 1.1 (plex/LICENSE).
+
+Pinned and vendored deliberately, copied from apex-interface: phones at the field
+may have no internet, and the interface must still render. Map tiles are the one
+exception; the map falls back to a drawn course when they cannot load.
+
+To upgrade, replace the files and update the versions above.
