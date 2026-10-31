@@ -163,14 +163,10 @@ textarea.well { min-height: 5.5rem; line-height: 1.5; resize: vertical; }
   border-bottom: 1px solid var(--line);
 }
 
-.brand {
-  display: inline-flex; align-items: center; gap: var(--s2);
-  color: var(--text); text-decoration: none;
-  font: 500 var(--t-small)/1 var(--f-sans);
-  letter-spacing: 0.18em;
-  flex: none;
-}
-.mark { width: 11px; height: 11px; fill: var(--accent); }
+.brand { display: inline-flex; align-items: center; flex: none; }
+/* The team logo, in its own colours. Sized by height; it is slightly taller than wide. */
+.logo { display: block; height: 34px; width: auto; }
+.logo-large { height: 88px; margin-bottom: var(--s2); justify-self: start; }
 
 /* Tabs are text; the current one is underlined in the accent, on the bar's
    own bottom rule. */
@@ -332,8 +328,6 @@ main {
  * come from the course and are data, so the chrome around them stays neutral.
  */
 
-.roll-word { color: var(--accent); }
-
 .dim { color: var(--dim); }
 .slower { color: var(--bad); }
 .faster { color: var(--ok); }
@@ -393,6 +387,7 @@ ol.board-list li { grid-template-columns: 1.5rem minmax(0, 1fr) auto auto; }
 ol.board-list li::before { counter-increment: rank; content: counter(rank); font-family: var(--f-mono); color: var(--faint); }
 .board-list a, .ranking a { color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-list a:hover, .ranking a:hover { text-decoration: underline; }
+.board-panel td a { color: var(--text); text-decoration-color: var(--faint); text-underline-offset: 2px; }
 .board-today { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s3); font-size: var(--t-small); }
 .big-num { font-size: 1.5rem; }
 .swatch { display: inline-block; width: 0.55rem; height: 0.55rem; margin-right: var(--s2); border-radius: 1px; vertical-align: 0; }
@@ -582,7 +577,6 @@ tr.missed td { color: var(--faint); }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--s3); }
   .stats > div:nth-child(odd) { border-left: 0; padding-left: 0; }
   .quality > div { grid-template-columns: 1fr; gap: 0; }
-  .tab .roll-word { letter-spacing: 0; }
 }
 
 /* ── password gate ────────────────────────────────────────────────────────── */
@@ -617,7 +611,6 @@ body.gate { display: flex; flex-direction: column; min-height: 100vh; }
   :root { --gutter: var(--s4); }
 
   .topbar { gap: var(--s3); }
-  .brand span { display: none; }
   .tabs { gap: var(--s3); }
   #logout { padding-inline: var(--s2); }
 

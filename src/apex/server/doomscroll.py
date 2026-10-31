@@ -154,21 +154,11 @@ def leaderboard(listed: list[dict], course: CourseSpec, today: str) -> dict:
     buggies = []
     for name, es in per_buggy.items():
         done = [e for e in es if e["summary"]["complete"]]
-        bests = [
-            min((seg["time_sec"] for e in es if (seg := _seg(e["summary"], spec.id))), default=None)
-            for spec in course.segments
-        ]
         best = min(done, key=lambda e: e["summary"]["total_sec"]) if done else None
-        theoretical = sum(bests) if None not in bests else None
-        if theoretical is not None and best:
-            # Segment times are stored rounded; never let that put it above the real best.
-            theoretical = min(theoretical, best["summary"]["total_sec"])
         buggies.append({
             "buggy": name,
             "rolls": len(es),
             "best": _brief(best) if best else None,
-            # The sum of the buggy's best segments: what a roll stitched from them would take.
-            "theoretical_sec": round(theoretical, 3) if theoretical is not None else None,
             "median_sec": round(statistics.median(e["summary"]["total_sec"] for e in done), 3) if done else None,
         })
     buggies.sort(key=lambda b: (b["best"] is None, b["best"]["total_sec"] if b["best"] else 0))

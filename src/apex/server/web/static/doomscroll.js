@@ -236,12 +236,10 @@ function renderBoard(board) {
     panel("By buggy", board.buggies.length
       ? h("div", { class: "scroller" }, h("table", {},
           h("thead", {}, h("tr", {}, h("th", {}, "Buggy"), h("th", { class: "n" }, "Best"),
-            h("th", { class: "n", title: "Sum of the buggy's best segment times" }, "Theoretical"),
             h("th", { class: "n" }, "Median"), h("th", { class: "n" }, "Rolls"))),
           h("tbody", {}, board.buggies.map((b) => h("tr", {},
             h("td", {}, b.buggy),
             h("td", { class: "n" }, b.best ? rollLink(b.best, secs(b.best.total_sec)) : "—"),
-            h("td", { class: "n" }, b.theoretical_sec ? secs(b.theoretical_sec) : "—"),
             h("td", { class: "n" }, b.median_sec ? secs(b.median_sec) : "—"),
             h("td", { class: "n" }, b.rolls))))))
       : empty),

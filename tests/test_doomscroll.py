@@ -72,8 +72,8 @@ def test_leaderboard(client, season):
     (solaris,) = board["buggies"]
     assert solaris["buggy"] == "Solaris" and solaris["rolls"] == 4
     assert solaris["best"]["total_sec"] == totals[0]
-    assert solaris["theoretical_sec"] <= solaris["best"]["total_sec"]
-    assert solaris["theoretical_sec"] == pytest.approx(sum(s["best"]["time_sec"] for s in board["segments"]), abs=0.01)
+    assert "theoretical_sec" not in solaris
+    assert solaris["median_sec"] >= solaris["best"]["total_sec"]
 
 
 def test_roll_page(client, season):

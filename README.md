@@ -96,8 +96,7 @@ split for each segment with the gap to that buggy's best roll. Badges mark a bug
 roll that **stopped** on the course.
 
 **Leaderboard.** It sits above the feed and follows the filters. It lists the fastest
-rolls, the record for each segment, and each buggy's best, median and *theoretical best*
-(the sum of its best segment times).
+rolls, the record for each segment, and each buggy's best and median time.
 
 **Roll page.** Tap a card to open it:
 
