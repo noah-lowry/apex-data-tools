@@ -2,7 +2,7 @@
  *
  * Carries over the look of apex-interface:
  *
- * 1. Chrome is neutral; one warm accent (brass) is spent only on the primary
+ * 1. Chrome is neutral; one accent (red) is spent only on the primary
  *    action, the focus ring, and "look here".
  * 2. Figures in IBM Plex Mono so digits align; prose in Plex Sans. Both
  *    vendored, because the field laptop may have no network.
@@ -55,16 +55,16 @@
   color-scheme: dark;
   --bg: #141412; --surface: #1c1c1a; --line: #2d2d2a; --line-soft: #232321;
   --text: #e8e5de; --dim: #9c9991; --faint: #6d6a63;
-  --accent: #d3a24f; --on-accent: #141412;
-  --ok: #8db47e; --warn: #d3a24f; --bad: #d9796f;
+  --accent: #e8574e; --on-accent: #141412;
+  --ok: #8db47e; --warn: #e8574e; --bad: #d9796f;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
   --bg: #f4f2ec; --surface: #ebe9e2; --line: #d4d1c8; --line-soft: #e2dfd6;
   --text: #1b1a17; --dim: #605d56; --faint: #8f8c84;
-  --accent: #a2742a; --on-accent: #f4f2ec;
-  --ok: #3f7a3a; --warn: #a2742a; --bad: #b0433c;
+  --accent: #b8322a; --on-accent: #f4f2ec;
+  --ok: #3f7a3a; --warn: #b8322a; --bad: #b0433c;
 }
 
 /* ── base ─────────────────────────────────────────────────────────────────── */

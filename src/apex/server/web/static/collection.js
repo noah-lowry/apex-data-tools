@@ -143,7 +143,9 @@ async function refresh() {
 
 // ── name pickers ──────────────────────────────────────────────────────────
 
-/** A roster <select> ending in "+ New …", which opens an inline name field. */
+/** A roster <select> whose "+ New …" option opens an inline name field. That
+    option sits at the top and is always present, roster or no roster, so a name
+    nobody has entered yet can always be typed in. */
 class NamePicker {
   constructor(kind, { noneLabel }) {
     this.kind = kind;
@@ -153,7 +155,7 @@ class NamePicker {
     this.input = $(`roll-${kind}-name`);
     this.roster = [];     // names from the server, most recently used first
     this.added = [];      // typed here, not on the server's roster until a roll uses them
-    this.names = [];      // what the <select> currently lists
+    this.names = null;    // what the <select> currently lists; null until first built
     this.previous = "";
 
     this.select.addEventListener("change", () => {
@@ -168,6 +170,7 @@ class NamePicker {
       if (e.key === "Enter") { e.preventDefault(); this.confirmNew(); }
       if (e.key === "Escape") this.closeNew();
     });
+    this.rebuild();  // usable before the first fetch, and offline
   }
 
   setNames(roster) {
@@ -179,14 +182,14 @@ class NamePicker {
 
   rebuild() {
     const all = [...this.added, ...this.roster];
-    if (all.join("\n") === this.names.join("\n")) return;
+    if (this.names !== null && all.join("\n") === this.names.join("\n")) return;
     this.names = all;
 
     const keep = this.select.value;
     this.select.replaceChildren(
       h("option", { value: "" }, this.noneLabel),
-      ...all.map((n) => h("option", { value: n }, n)),
       h("option", { value: NEW }, `+ New ${this.kind}…`),
+      ...all.map((n) => h("option", { value: n }, n)),
     );
     this.select.value = all.includes(keep) || keep === NEW ? keep : "";
     this.sync();

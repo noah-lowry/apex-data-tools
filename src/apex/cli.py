@@ -170,7 +170,7 @@ def serve(
             body,
             title="[bold]APEX[/] collection server",
             title_align="left",
-            border_style="#d3a24f",
+            border_style="#e8574e",
             expand=False,
             padding=(1, 2),
         )
