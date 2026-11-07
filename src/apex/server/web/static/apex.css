@@ -248,6 +248,14 @@ main {
 .form-pair { display: grid; gap: var(--s5); grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
 
 .field { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
+
+/* Hill 1–5 pushers: a labelled group of smaller pickers. The inline "new name"
+   row wraps so its buttons fit under the input in a narrow cell. */
+.pushers { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.pusher-grid { display: grid; gap: var(--s4); grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); }
+.pusher-grid .choice { flex-wrap: wrap; }
+.pusher-grid .choice > input { flex-basis: 100%; }
+.pusher-grid .choice > button { flex: 1 1 0; }
 .field-label { font-size: var(--t-small); color: var(--dim); }
 .field-label .req { color: var(--accent); margin-left: 0.15em; }
 
@@ -619,6 +627,7 @@ body.gate { display: flex; flex-direction: column; min-height: 100vh; }
   .block > .block-head { flex-direction: row; align-items: baseline; justify-content: space-between; }
 
   .form-pair { grid-template-columns: 1fr; }
+  .pusher-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-foot .btn-primary { flex: 1 1 100%; }
   .form-foot .btn-quiet { flex: 1 1 0; }
   .form-foot .spacer { display: none; }

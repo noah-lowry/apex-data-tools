@@ -35,7 +35,32 @@ def test_roster_is_most_recent_first(store):
     store.create_roll("Solaris", driver="Mia", now=T0)
     store.create_roll("Kingfisher", driver="Ana", now=T0 + timedelta(minutes=1))
     store.create_roll("Solaris", now=T0 + timedelta(minutes=2))
-    assert store.roster() == {"buggy": ["Solaris", "Kingfisher"], "driver": ["Ana", "Mia"]}
+    store.create_roll("Solaris", pushers=[None, "Bo"], now=T0 + timedelta(minutes=3))
+    assert store.roster() == {
+        "buggy": ["Solaris", "Kingfisher"],
+        "driver": ["Ana", "Mia"],
+        "pusher": ["Bo"],
+    }
+
+
+def test_pushers_added_to_an_older_database(tmp_path):
+    import sqlite3
+
+    from apex.server.db import Store
+
+    # A database from before pushers existed: no pusher table or hill columns.
+    with sqlite3.connect(tmp_path / "apex.db") as conn:
+        conn.executescript(
+            "CREATE TABLE buggy (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, last_used_utc TEXT NOT NULL);"
+            "CREATE TABLE driver (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, last_used_utc TEXT NOT NULL);"
+            "CREATE TABLE roll (id INTEGER PRIMARY KEY, buggy_id INTEGER NOT NULL, driver_id INTEGER, notes TEXT NOT NULL DEFAULT '', created_utc TEXT NOT NULL, day TEXT NOT NULL);"
+            "INSERT INTO buggy VALUES (1, 'Solaris', '2026-10-31T14:00:00.000+00:00');"
+            "INSERT INTO roll VALUES (1, 1, NULL, '', '2026-10-31T14:00:00.000+00:00', '2026-10-31');"
+        )
+    store = Store(tmp_path)
+    assert store.get_roll(1)["pushers"] == [None] * 5
+    edited = store.update_roll(1, "Solaris", pushers=["Ana"])
+    assert edited["pushers"] == ["Ana", None, None, None, None]
 
 
 def test_ingest_parses_and_keeps_raw_bytes(store):

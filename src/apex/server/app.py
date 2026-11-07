@@ -15,7 +15,7 @@ from apex.config import clear_server_info, write_server_info
 
 from . import doomscroll
 from .auth import Auth, PasswordGate, client_key, safe_next, set_session
-from .db import Conflict, NotFound, Store, local_day
+from .db import HILLS, Conflict, NotFound, Store, local_day
 
 WEB_DIR = Path(__file__).parent / "web"
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
@@ -33,11 +33,20 @@ class RollCreate(BaseModel):
     buggy: str = Field(min_length=1, max_length=MAX_NAME)
     driver: str | None = Field(default=None, max_length=MAX_NAME)
     notes: str = Field(default="", max_length=4000)
+    # Pushers for hills 1..HILLS in order; null or blank for a hill nobody is named on.
+    pushers: list[Annotated[str | None, Field(max_length=MAX_NAME)]] = Field(
+        default_factory=list, max_length=HILLS
+    )
 
     @field_validator("buggy", "driver", mode="before")
     @classmethod
     def _names(cls, v):
         return _clean_name(v) if isinstance(v, str) else v
+
+    @field_validator("pushers", mode="before")
+    @classmethod
+    def _pushers(cls, v):
+        return [_clean_name(n) if isinstance(n, str) else n for n in v] if isinstance(v, list) else v
 
     @field_validator("notes")
     @classmethod
@@ -131,13 +140,15 @@ def create_app(*, password: str, data_dir: Path, advertise_url: str | None = Non
 
     @app.post("/api/rolls", status_code=201)
     def create_roll(body: RollCreate) -> dict:
-        return store.create_roll(body.buggy, body.driver, body.notes)
+        return store.create_roll(body.buggy, body.driver, body.notes, pushers=body.pushers)
 
     @app.put("/api/rolls/{roll_id}")
     def update_roll(roll_id: int, body: RollCreate) -> dict:
-        """Replace buggy, driver and notes; a blank driver or notes clears it."""
+        """Replace buggy, driver, pushers and notes; a blank (or omitted) one clears it."""
         try:
-            return store.update_roll(roll_id, body.buggy, body.driver, body.notes)
+            return store.update_roll(
+                roll_id, body.buggy, body.driver, body.notes, pushers=body.pushers
+            )
         except NotFound as exc:
             raise HTTPException(404, str(exc)) from exc
 

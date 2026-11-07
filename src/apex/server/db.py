@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS driver (
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
     last_used_utc TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pusher (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    last_used_utc TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS roll (
     id INTEGER PRIMARY KEY,
     buggy_id INTEGER NOT NULL REFERENCES buggy(id),
@@ -43,7 +48,7 @@ CREATE TABLE IF NOT EXISTS roll (
     notes TEXT NOT NULL DEFAULT '',
     created_utc TEXT NOT NULL,
     day TEXT NOT NULL  -- server-local date the roll was created
-    -- plus edited_utc, added by Store._migrate
+    -- plus edited_utc and HILL_COLUMNS, added by Store._migrate
 );
 CREATE TABLE IF NOT EXISTS watch_file (
     id INTEGER PRIMARY KEY,
@@ -84,7 +89,11 @@ CREATE TABLE IF NOT EXISTS file_analysis (
 # start gate, which beats the moment someone pressed Create. Until then, it is the
 # creation time. The roll's day, and so its number, follow the same time. (With
 # MIN(), SQLite takes the bare `day` column from the row holding the minimum.)
-ROLLS_CTE = """
+# Who pushed each hill: optional, one pusher per hill, from a shared roster.
+HILLS = 5
+HILL_COLUMNS = [f"hill{n}_pusher_id" for n in range(1, HILLS + 1)]
+
+ROLLS_CTE = f"""
 data_time AS (
     SELECT roll_id, MIN(roll_start_utc) AS data_start_utc, day AS data_day
     FROM watch_file
@@ -93,6 +102,7 @@ data_time AS (
 ),
 timed AS (
     SELECT r.id, r.buggy_id, r.driver_id, r.notes, r.created_utc, r.edited_utc,
+           {", ".join(f"r.{c}" for c in HILL_COLUMNS)},
            d.data_start_utc,
            COALESCE(d.data_start_utc, r.created_utc) AS at_utc,
            COALESCE(d.data_day, r.day) AS day
@@ -109,10 +119,12 @@ numbered AS (
     FROM timed t
 )
 SELECT n.id, n.notes, n.created_utc, n.edited_utc, n.data_start_utc, n.at_utc,
-       n.day, n.number, b.name AS buggy, d.name AS driver
+       n.day, n.number, b.name AS buggy, d.name AS driver,
+       {", ".join(f"p{i}.name AS hill{i}_pusher" for i in range(1, HILLS + 1))}
 FROM numbered n
 JOIN buggy b ON b.id = n.buggy_id
 LEFT JOIN driver d ON d.id = n.driver_id
+{"".join(f"LEFT JOIN pusher p{i} ON p{i}.id = n.hill{i}_pusher_id " for i in range(1, HILLS + 1))}
 """
 
 # The roll inside the recording, from the start-gate crossing to the last gate
@@ -179,7 +191,10 @@ class Store:
     @staticmethod
     def _migrate(conn: sqlite3.Connection) -> None:
         """Add columns introduced since a database was created."""
-        added = {"watch_file": ROLL_COLUMNS, "roll": {"edited_utc": "TEXT"}}
+        added = {
+            "watch_file": ROLL_COLUMNS,
+            "roll": {"edited_utc": "TEXT"} | {c: "INTEGER REFERENCES pusher(id)" for c in HILL_COLUMNS},
+        }
         for table, columns in added.items():
             have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
             for name, decl in columns.items():
@@ -271,21 +286,26 @@ class Store:
     # ── roster ───────────────────────────────────────────────────────────────
 
     def roster(self) -> dict[str, list[str]]:
-        """Buggy and driver names in use by some roll, most recently used first.
+        """Buggy, driver and pusher names in use by some roll, most recently used first.
 
         Only names a roll still uses: a typo corrected by editing drops out.
         """
+        uses = {
+            "buggy": "roll.buggy_id = t.id",
+            "driver": "roll.driver_id = t.id",
+            "pusher": "t.id IN (" + ", ".join(f"roll.{c}" for c in HILL_COLUMNS) + ")",
+        }
         with self._connect() as conn:
             return {
                 table: [
                     row["name"]
                     for row in conn.execute(
                         f"SELECT name FROM {table} t WHERE EXISTS "
-                        f"(SELECT 1 FROM roll WHERE roll.{table}_id = t.id) "
+                        f"(SELECT 1 FROM roll WHERE {used}) "
                         "ORDER BY last_used_utc DESC, name"
                     )
                 ]
-                for table in ("buggy", "driver")
+                for table, used in uses.items()
             }
 
     @staticmethod
@@ -298,20 +318,36 @@ class Store:
         )
         return conn.execute(f"SELECT id FROM {table} WHERE name = ?", (name,)).fetchone()[0]
 
+    @classmethod
+    def _resolve_pushers(
+        cls, conn: sqlite3.Connection, pushers: list[str | None] | None, now: str
+    ) -> list[int | None]:
+        """Pusher ids for hills 1..HILLS; missing or blank hills have none."""
+        names = list(pushers or [])[:HILLS]
+        names += [None] * (HILLS - len(names))
+        return [cls._resolve_name(conn, "pusher", n, now) if n else None for n in names]
+
     # ── rolls ────────────────────────────────────────────────────────────────
 
     def create_roll(
-        self, buggy: str, driver: str | None = None, notes: str = "", now: datetime | None = None
+        self,
+        buggy: str,
+        driver: str | None = None,
+        notes: str = "",
+        now: datetime | None = None,
+        pushers: list[str | None] | None = None,
     ) -> dict:
+        """`pushers` names hill 1's pusher first; hills left out or blank have none."""
         moment = now or _utc_now()
         stamp = _iso(moment)
         with self._connect() as conn:
             buggy_id = self._resolve_name(conn, "buggy", buggy, stamp)
             driver_id = self._resolve_name(conn, "driver", driver, stamp) if driver else None
+            pusher_ids = self._resolve_pushers(conn, pushers, stamp)
             roll_id = conn.execute(
-                "INSERT INTO roll (buggy_id, driver_id, notes, created_utc, day) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (buggy_id, driver_id, notes, stamp, local_day(moment)),
+                f"INSERT INTO roll (buggy_id, driver_id, notes, created_utc, day, "
+                f"{', '.join(HILL_COLUMNS)}) VALUES (?, ?, ?, ?, ?{', ?' * HILLS})",
+                (buggy_id, driver_id, notes, stamp, local_day(moment), *pusher_ids),
             ).lastrowid
         return self.get_roll(roll_id)
 
@@ -322,19 +358,22 @@ class Store:
         driver: str | None = None,
         notes: str = "",
         now: datetime | None = None,
+        pushers: list[str | None] | None = None,
     ) -> dict:
-        """Replace a roll's buggy, driver and notes. Its timestamp, and so its
-        place in the order, is unchanged; its number follows the new buggy."""
+        """Replace a roll's buggy, driver, pushers and notes. Its timestamp, and so
+        its place in the order, is unchanged; its number follows the new buggy."""
         stamp = _iso(now or _utc_now())
         with self._connect() as conn:
             if conn.execute("SELECT 1 FROM roll WHERE id = ?", (roll_id,)).fetchone() is None:
                 raise NotFound(f"no roll {roll_id}")
             buggy_id = self._resolve_name(conn, "buggy", buggy, stamp)
             driver_id = self._resolve_name(conn, "driver", driver, stamp) if driver else None
+            pusher_ids = self._resolve_pushers(conn, pushers, stamp)
             conn.execute(
-                "UPDATE roll SET buggy_id = ?, driver_id = ?, notes = ?, edited_utc = ? "
-                "WHERE id = ?",
-                (buggy_id, driver_id, notes, stamp, roll_id),
+                "UPDATE roll SET buggy_id = ?, driver_id = ?, notes = ?, edited_utc = ?, "
+                + ", ".join(f"{c} = ?" for c in HILL_COLUMNS)
+                + " WHERE id = ?",
+                (buggy_id, driver_id, notes, stamp, *pusher_ids, roll_id),
             )
         return self.get_roll(roll_id)
 
@@ -382,6 +421,7 @@ class Store:
                     files[f["roll_id"]].append(f["id"])
 
         for r in rows:
+            r["pushers"] = [r.pop(f"hill{i}_pusher") for i in range(1, HILLS + 1)]
             r["title"] = roll_title(r["buggy"], r["number"], r["day"])
             r["file_ids"] = files[r["id"]]
         return rows

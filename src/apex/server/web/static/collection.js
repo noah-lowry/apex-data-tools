@@ -12,6 +12,7 @@
 const POLL_MS = 10_000;
 const TICK_MS = 30_000;
 const NEW = "__new__";
+const HILLS = 5;
 
 const state = {
   scope: "today",        // "today" | "all"
@@ -173,6 +174,13 @@ class NamePicker {
     this.set(existing || name);
   }
 
+  /** Offer `name` here too, as if it had been typed in (no-op if listed). */
+  remember(name) {
+    if (this.names.some((n) => n.toLowerCase() === name.toLowerCase())) return;
+    this.added.unshift(name);
+    this.rebuild();
+  }
+
   /** The chosen name, or a name typed into the open "new" field. */
   get value() {
     if (!this.row.hidden) return this.input.value.trim().replace(/\s+/g, " ") || null;
@@ -228,20 +236,64 @@ const pickerFor = (kind, noneLabel) => new NamePicker(kind, {
   row: $(`roll-${kind}-new`),
   input: $(`roll-${kind}-name`),
 });
+/** Optional pickers for who pushed hills 1–5, all drawing on one pusher
+    roster: a name added on one hill is offered on the others straight away.
+    Its labelled group is `.field`. */
+function pusherGroup() {
+  const pickers = Array.from({ length: HILLS }, (_, i) =>
+    NamePicker.create("pusher", { noneLabel: "No pusher", label: `Hill ${i + 1}` }));
+  for (const p of pickers) {
+    p.select.addEventListener("picked", () => {
+      const name = p.value;
+      if (name) for (const other of pickers) if (other !== p) other.remember(name);
+    });
+  }
+  const headingId = `pushers-${++NamePicker.count}`;
+  return {
+    pickers,
+    field: h("div", { class: "pushers", role: "group", "aria-labelledby": headingId },
+      h("span", { class: "field-label", id: headingId }, "Pushers"),
+      h("div", { class: "pusher-grid" }, pickers.map((p) => p.field))),
+    setNames(names) { for (const p of pickers) p.setNames(names); },
+    /** Names for hills 1..HILLS in order, null where nobody is named. */
+    get values() { return pickers.map((p) => p.value); },
+    set(names = []) { pickers.forEach((p, i) => p.set(names[i] || "")); },
+    /** Nothing chosen and no "new name" field open. */
+    get untouched() { return pickers.every((p) => p.row.hidden && !p.value); },
+    get busy() { return pickers.some((p) => p.busy); },
+  };
+}
+
+/** "Pushers: H1 Ana, H3 Bo", or nothing when no hill has a pusher. */
+function pusherFact(roll) {
+  const named = roll.pushers.flatMap((p, i) => (p ? [`H${i + 1} ${p}`] : []));
+  return named.length ? h("span", {}, `Pushers: ${named.join(", ")}`) : null;
+}
+
 const buggyPicker = pickerFor("buggy", "Choose buggy…");
 const driverPicker = pickerFor("driver", "No driver");
+const pushers = pusherGroup();
+$("roll-pushers").append(pushers.field);
 
-/** Picking a buggy fills in whoever last drove it, which is usually right. */
-function suggestDriver() {
+/** Picking a buggy fills in whoever last drove and pushed it, which is usually
+    right. Only fields still empty are filled. */
+function suggestCrew() {
   const buggy = buggyPicker.value;
-  if (!buggy || !state.data || !driverPicker.row.hidden) return;
-  const last = state.data.rolls.find(
-    (r) => r.buggy.toLowerCase() === buggy.toLowerCase() && r.driver,
+  if (!buggy || !state.data) return;
+  const lastWith = (has) => state.data.rolls.find(
+    (r) => r.buggy.toLowerCase() === buggy.toLowerCase() && has(r),
   );
-  if (last) driverPicker.set(last.driver);
+  if (driverPicker.row.hidden) {
+    const last = lastWith((r) => r.driver);
+    if (last) driverPicker.set(last.driver);
+  }
+  if (pushers.untouched) {
+    const last = lastWith((r) => r.pushers.some(Boolean));
+    if (last) pushers.set(last.pushers);
+  }
 }
-buggyPicker.select.addEventListener("change", suggestDriver);
-buggyPicker.select.addEventListener("picked", suggestDriver);
+buggyPicker.select.addEventListener("change", suggestCrew);
+buggyPicker.select.addEventListener("picked", suggestCrew);
 
 // ── new roll ──────────────────────────────────────────────────────────────
 
@@ -264,12 +316,14 @@ $("roll-form").addEventListener("submit", async (e) => {
     const roll = await api("POST", "/api/rolls", {
       buggy,
       driver: driverPicker.value,
+      pushers: pushers.values,
       notes: $("roll-notes").value,
     });
     status.textContent = `Created ${roll.title}`;
     status.className = "status ok";
     buggyPicker.set("");
     driverPicker.set("");
+    pushers.set();
     $("roll-notes").value = "";
     state.dataKey = "";
     await refresh();
@@ -355,6 +409,7 @@ function rollItem(roll, filesById) {
     h("div", { class: "item-row" },
       h("div", { class: "facts" },
         h("span", {}, roll.driver ? `Driver: ${roll.driver}` : "No driver"),
+        pusherFact(roll),
         // Timed by its data; keep the moment it was logged visible too.
         roll.data_start_utc ? h("span", {}, "logged ", h("span", { class: "num" }, clock(roll.created_utc))) : null,
         roll.edited_utc ? h("span", {}, "edited ", h("span", { class: "num" }, clock(roll.edited_utc))) : null),
@@ -382,7 +437,7 @@ function rollItem(roll, filesById) {
 
 // ── editing rolls ─────────────────────────────────────────────────────────
 
-/** An inline form replacing a roll's entry: buggy, driver and notes, saved as
+/** An inline form replacing a roll's entry: buggy, driver, pushers and notes, saved as
     a whole, or the roll deleted. Its node is kept across re-renders, so a poll
     never throws away what someone is typing. */
 function rollEditor(roll) {
@@ -392,6 +447,9 @@ function rollEditor(roll) {
   driver.setNames(state.data.roster.driver);
   buggy.set(roll.buggy);
   driver.set(roll.driver || "");
+  const crew = pusherGroup();
+  crew.setNames(state.data.roster.pusher);
+  crew.set(roll.pushers);
 
   const notesId = `notes-edit-${roll.id}`;
   const notes = h("textarea", { class: "well", id: notesId, rows: 3, maxlength: 4000 });
@@ -428,6 +486,7 @@ function rollEditor(roll) {
 
   const form = h("form", { class: "form", novalidate: true },
     h("div", { class: "form-pair" }, buggy.field, driver.field),
+    crew.field,
     h("div", { class: "field" }, h("label", { class: "field-label", for: notesId }, "Notes"), notes),
     h("div", { class: "form-foot" }, save, cancel, h("span", { class: "spacer" }), del),
     status,
@@ -445,7 +504,7 @@ function rollEditor(roll) {
     status.className = "status";
     try {
       await api("PUT", `/api/rolls/${roll.id}`, {
-        buggy: buggy.value, driver: driver.value, notes: notes.value,
+        buggy: buggy.value, driver: driver.value, pushers: crew.values, notes: notes.value,
       });
       closeEditor();
       state.dataKey = "";
@@ -496,7 +555,7 @@ function flushDeferredRender() {
 function render() {
   const data = state.data;
   if (!data) return;
-  if (listBusy() || buggyPicker.busy || driverPicker.busy || editorBusy()) {
+  if (listBusy() || buggyPicker.busy || driverPicker.busy || pushers.busy || editorBusy()) {
     state.renderDeferred = true;
     return;
   }
@@ -505,6 +564,7 @@ function render() {
   $("scope-day").textContent = state.scope === "all" ? "All days" : dayLabel(data.today);
   buggyPicker.setNames(data.roster.buggy);
   driverPicker.setNames(data.roster.driver);
+  pushers.setNames(data.roster.pusher);
 
   const unassigned = data.files.filter((f) => f.roll_id === null);
   for (const id of state.picks.keys()) {

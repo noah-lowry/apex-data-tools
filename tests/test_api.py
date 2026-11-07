@@ -57,7 +57,8 @@ def test_create_roll_and_list(client):
 
     data = client.get("/api/collection").json()
     assert [r["id"] for r in data["rolls"]] == [second["id"], roll["id"]]
-    assert data["roster"] == {"buggy": ["Solaris"], "driver": ["Mia"]}
+    assert data["roster"] == {"buggy": ["Solaris"], "driver": ["Mia"], "pusher": []}
+    assert roll["pushers"] == [None] * 5
 
 
 def test_roll_requires_buggy(client):
@@ -131,10 +132,28 @@ def test_edit_roll(client):
     assert edited["number"] == 1
     assert [r["number"] for r in client.get("/api/collection").json()["rolls"]] == [2, 1]
     # The typo no longer appears in the dropdowns; neither does the dropped driver.
-    assert client.get("/api/collection").json()["roster"] == {"buggy": ["Solaris"], "driver": []}
+    assert client.get("/api/collection").json()["roster"] == {"buggy": ["Solaris"], "driver": [], "pusher": []}
 
     assert client.put(f"/api/rolls/{roll['id']}", json={"buggy": " "}).status_code == 422
     assert client.put("/api/rolls/999", json={"buggy": "Solaris"}).status_code == 404
+
+
+def test_roll_pushers(client):
+    roll = client.post(
+        "/api/rolls", json={"buggy": "Solaris", "pushers": [" Ana ", None, "", "Bo"]}
+    ).json()
+    assert roll["pushers"] == ["Ana", None, None, "Bo", None]
+    assert client.get("/api/collection").json()["roster"]["pusher"] == ["Ana", "Bo"]
+
+    # Replacing the roll replaces its pushers; a dropped name leaves the roster.
+    edited = client.put(
+        f"/api/rolls/{roll['id']}", json={"buggy": "Solaris", "pushers": [None, "ana"] + [None] * 3}
+    ).json()
+    assert edited["pushers"] == [None, "Ana", None, None, None]
+    assert client.get("/api/collection").json()["roster"]["pusher"] == ["Ana"]
+
+    assert client.post("/api/rolls", json={"buggy": "Solaris", "pushers": ["a"] * 6}).status_code == 422
+    assert client.post("/api/rolls", json={"buggy": "Solaris", "pushers": ["x" * 81]}).status_code == 422
 
 
 def test_delete_roll_unassigns_its_data(client):
