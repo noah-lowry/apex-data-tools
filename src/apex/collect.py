@@ -77,11 +77,16 @@ def select_files(
 
 
 def _request(request: urllib.request.Request, timeout: float) -> dict:
+    """Send a request to the server and decode its JSON reply."""
+    return json.loads(_fetch(request, timeout))
+
+
+def _fetch(request: urllib.request.Request, timeout: float) -> bytes:
     """Send a request to the server, turning failures into readable errors."""
     base = f"{urllib.parse.urlsplit(request.full_url).scheme}://{request.host}"
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.load(response)
+            return response.read()
     except urllib.error.HTTPError as exc:
         detail = _error_detail(exc)
         if exc.code == 401:

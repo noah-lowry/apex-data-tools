@@ -188,6 +188,26 @@ def create_app(*, password: str, data_dir: Path, advertise_url: str | None = Non
         except NotFound as exc:
             raise HTTPException(404, str(exc)) from exc
 
+    @app.get("/api/files")
+    def list_files(
+        day: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    ) -> dict:
+        """Files recorded on `day` (default: today, server-local) or assigned to its rolls."""
+        day = day or local_day(datetime.now().astimezone())
+        return {"day": day, "files": store.list_files(day=day)}
+
+    @app.get("/api/files/{file_id}/raw")
+    def raw_file(file_id: int) -> FileResponse:
+        """The file's original bytes, exactly as uploaded."""
+        try:
+            file = store.get_file(file_id)
+        except NotFound as exc:
+            raise HTTPException(404, str(exc)) from exc
+        path = store.raw_path(file["sha256"])
+        if not path.is_file():
+            raise HTTPException(410, f"raw bytes for file {file_id} are missing from the server")
+        return FileResponse(path, media_type="application/octet-stream", filename=file["filename"])
+
     @app.post("/api/files")
     async def upload_file(
         request: Request,

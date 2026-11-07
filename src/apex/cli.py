@@ -1,4 +1,5 @@
-"""`apex serve` runs the collection server; `apex collect-rolls` feeds it watch files."""
+"""`apex serve` runs the collection server; `apex collect-rolls` feeds it watch files;
+`apex export-fits` downloads them again."""
 
 import os
 import socket
@@ -50,9 +51,49 @@ DataDir = Annotated[
 ]
 
 
+ServerUrl = Annotated[
+    str | None,
+    typer.Option(
+        "--server",
+        envvar="APEX_SERVER",
+        help="Server URL, overriding [bold]apex config[/].",
+        rich_help_panel="Server",
+    ),
+]
+ServerPassword = Annotated[
+    str | None,
+    typer.Option(
+        "--password",
+        envvar="APEX_PASSWORD",
+        help="Server password, overriding [bold]apex config[/].",
+        rich_help_panel="Server",
+    ),
+]
+
+
 def fail(message: str, code: int = 1) -> typer.Exit:
     err_console.print(f"[bold red]error[/] {message}")
     return typer.Exit(code)
+
+
+def server_connection(server: str | None, password: str | None, data_dir: Path):
+    """The server to talk to and its secret, or exit explaining how to set them."""
+    try:
+        conn = resolve_connection(server, password, data_dir.expanduser())
+    except ValueError as exc:
+        raise fail(str(exc), code=2) from exc
+    if conn is None:
+        raise fail(
+            "no server configured. Set one with [bold]apex config set server URL[/] "
+            "and [bold]apex config set password[/].",
+            code=2,
+        )
+    if not conn.secret:
+        raise fail(
+            f"no password for {conn.url}. Set it with [bold]apex config set password[/].",
+            code=2,
+        )
+    return conn
 
 
 # ── serve ────────────────────────────────────────────────────────────────────
@@ -248,22 +289,8 @@ def collect_rolls(
     all_days: Annotated[
         bool, typer.Option("--all", help="Include recordings from every day, not just today.")
     ] = False,
-    server: Annotated[
-        str | None,
-        typer.Option(
-            envvar="APEX_SERVER",
-            help="Server URL, overriding [bold]apex config[/].",
-            rich_help_panel="Server",
-        ),
-    ] = None,
-    password: Annotated[
-        str | None,
-        typer.Option(
-            envvar="APEX_PASSWORD",
-            help="Server password, overriding [bold]apex config[/].",
-            rich_help_panel="Server",
-        ),
-    ] = None,
+    server: ServerUrl = None,
+    password: ServerPassword = None,
     data_dir: DataDir = ...,
 ) -> None:
     """Send today's watch recordings to the server.
@@ -283,21 +310,7 @@ def collect_rolls(
             param_hint="'-b' / '--buggy'",
         )
 
-    try:
-        conn = resolve_connection(server, password, data_dir.expanduser())
-    except ValueError as exc:
-        raise fail(str(exc), code=2) from exc
-    if conn is None:
-        raise fail(
-            "no server configured. Set one with [bold]apex config set server URL[/] "
-            "and [bold]apex config set password[/].",
-            code=2,
-        )
-    if not conn.secret:
-        raise fail(
-            f"no password for {conn.url}. Set it with [bold]apex config set password[/].",
-            code=2,
-        )
+    conn = server_connection(server, password, data_dir)
     url, secret = conn.url, conn.secret
 
     table = Table(box=None, padding=(0, 2, 0, 0), header_style="dim")
@@ -345,6 +358,102 @@ def collect_rolls(
         skipped.append(f"{report.not_activity} non-activity files")
     if skipped:
         console.print(f"[dim]Skipped {', '.join(skipped)}.[/]")
+    if failed:
+        raise typer.Exit(1)
+
+
+# ── export-fits ──────────────────────────────────────────────────────────────
+
+EXPORT_STYLE = {
+    "saved": ("saved", "bold green"),
+    "exists": ("had", "dim"),
+    "failed": ("failed", "bold red"),
+}
+
+
+def _export_row(outcome) -> list:
+    label, style = EXPORT_STYLE[outcome.status]
+    file = outcome.file
+    started = file["roll_start_utc"] or file["start_utc"]
+    when = f"{datetime.fromisoformat(started).astimezone():%H:%M:%S}" if started else ""
+    note = Text(outcome.error, "red") if outcome.error else ""
+    if outcome.path and outcome.path.name != file["filename"]:
+        note = Text(f"saved as {outcome.path.name}", "yellow")
+    return [Text(label, style), file["filename"], when, file["buggy"] or "", note]
+
+
+@app.command("export-fits")
+def export_fits(
+    dest: Annotated[
+        Path | None,
+        typer.Argument(
+            metavar="[DEST]",
+            file_okay=False,
+            show_default="./apex-fits-DAY",
+            help="Folder to save into; created if needed.",
+        ),
+    ] = None,
+    day: Annotated[
+        datetime | None,
+        typer.Option(
+            "--day",
+            "-d",
+            formats=["%Y-%m-%d"],
+            metavar="YYYY-MM-DD",
+            show_default="today",
+            help="Which day's recordings to export.",
+        ),
+    ] = None,
+    server: ServerUrl = None,
+    password: ServerPassword = None,
+    data_dir: DataDir = ...,
+) -> None:
+    """Download a day's raw watch [bold].fit[/] files from the server.
+
+    Saves the files recorded that day, plus any assigned to that day's rolls,
+    byte for byte as they came off the watch. Running it again into the same
+    folder only downloads what is new.
+    """
+    from apex.collect import CollectError
+    from apex.export import export_day, http_files
+
+    day_str = (day.date() if day else datetime.now().astimezone().date()).isoformat()
+    dest = (dest or Path(f"apex-fits-{day_str}")).expanduser()
+    conn = server_connection(server, password, data_dir)
+
+    table = Table(box=None, padding=(0, 2, 0, 0), header_style="dim")
+    for name, justify in [
+        ("", "left"),
+        ("file", "left"),
+        ("start", "right"),
+        ("buggy", "left"),
+        ("", "left"),
+    ]:
+        table.add_column(name, justify=justify, no_wrap=True)
+
+    console.print(f"Exporting {day_str} from {conn.url} → [bold]{dest}[/]\n")
+    try:
+        with Live(table, console=console, auto_refresh=False, transient=True) as live:
+            report = export_day(
+                dest,
+                day=day_str,
+                files=http_files(conn.url, conn.secret),
+                on_outcome=lambda o: (table.add_row(*_export_row(o)), live.refresh()),
+            )
+    except CollectError as exc:
+        raise fail(str(exc)) from exc
+
+    if not report.outcomes:
+        console.print(f"No watch files on the server for {day_str}.")
+        return
+    console.print(table, "")
+    saved, failed = report.count("saved"), report.count("failed")
+    parts = [f"[bold green]{saved} saved[/]" if saved else "0 saved"]
+    if had := report.count("exists"):
+        parts.append(f"{had} already in {dest}")
+    if failed:
+        parts.append(f"[bold red]{failed} failed[/]")
+    console.print("  ·  ".join(parts))
     if failed:
         raise typer.Exit(1)
 
